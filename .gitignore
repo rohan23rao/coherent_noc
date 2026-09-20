@@ -1,0 +1,20 @@
+# Simulation build output
+sim_build/
+obj_dir/
+work/
+*.vvp
+*.vcd
+*.fst
+*.fst.hier
+*.ghw
+
+# cocotb / pytest
+results.xml
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Logs and editor scratch
+*.log
+.vscode/
+.idea/
