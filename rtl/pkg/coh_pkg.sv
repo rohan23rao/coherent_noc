@@ -233,6 +233,113 @@ package coh_pkg;
   } msg_type_e;
 
   //---------------------------------------------------------------------------
+  // Coherence message, as carried between an L1 and a directory bank. The
+  // network interface packetizes this into flits in Phase 8; until then the
+  // direct-connect harness passes it whole.
+  //---------------------------------------------------------------------------
+  typedef struct packed {
+    msg_type_e                 msg_type;
+    logic [LINE_ADDR_W-1:0]    addr;
+    logic [TILE_ID_W-1:0]      src;
+    logic [TILE_ID_W-1:0]      dst;
+    logic [TILE_ID_W-1:0]      requester;   // for forwards: who to answer
+    logic [ACK_FIELD_W-1:0]    ack_count;   // for Data from the directory
+    logic [LINE_W-1:0]         data;
+  } coh_msg_t;
+
+  localparam int unsigned COH_MSG_W = $bits(coh_msg_t);
+
+  //---------------------------------------------------------------------------
+  // Events at the L1 coherence controller. These are exactly the columns of
+  // the state table in docs/spec.md, in the same order.
+  //---------------------------------------------------------------------------
+  typedef enum logic [3:0] {
+    EV_LOAD          = 4'd0,
+    EV_STORE         = 4'd1,
+    EV_EVICT         = 4'd2,
+    EV_FWD_GETS      = 4'd3,
+    EV_FWD_GETM      = 4'd4,
+    EV_INV           = 4'd5,
+    EV_PUT_ACK       = 4'd6,
+    EV_DATA_E_DIR    = 4'd7,   // DataE from the directory
+    EV_DATA_DIR_A0   = 4'd8,   // Data from the directory, AckCount == 0
+    EV_DATA_DIR_AGT0 = 4'd9,   // Data from the directory, AckCount > 0
+    EV_DATA_OWNER    = 4'd10,  // Data forwarded by the previous owner
+    EV_INV_ACK       = 4'd11
+  } l1_event_e;
+
+  //---------------------------------------------------------------------------
+  // Actions the L1 table can request. A blank cell in the table sets `illegal`,
+  // which must raise $error -- there is deliberately no permissive default.
+  //---------------------------------------------------------------------------
+  typedef struct packed {
+    logic illegal;      // the event cannot occur in this state
+    logic stall;        // leave the message at the head of its queue, retry
+    logic hit;          // satisfy the core request from the cache
+    logic send_gets;
+    logic send_getm;
+    logic send_puts;
+    logic send_putm;    // carries data
+    logic send_pute;
+    logic send_inv_ack; // Inv-Ack to the requester named in the message
+    logic send_data_req;// Data to the requester named in the message
+    logic send_data_dir;// WB-Data to the directory as well
+    logic ack_dec;      // ack_cnt--
+    logic ack_add;      // ack_cnt += AckCount from the Data message
+    logic fill_data;    // capture the data carried by this message
+    logic complete;     // retire the MSHR and answer the core
+  } l1_action_t;
+
+  //---------------------------------------------------------------------------
+  // Events at the directory controller. These are exactly the columns of the
+  // directory state table in docs/spec.md. PutS is split by whether the
+  // requester is the last sharer, and Put{M,E} by whether the requester is the
+  // recorded owner -- getting that owner check right is the difference between
+  // a working protocol and silent data loss (race R5).
+  //---------------------------------------------------------------------------
+  typedef enum logic [3:0] {
+    DEV_GETS            = 4'd0,
+    DEV_GETM            = 4'd1,
+    DEV_PUTS_NOT_LAST   = 4'd2,
+    DEV_PUTS_LAST       = 4'd3,
+    DEV_PUTM_OWNER      = 4'd4,
+    DEV_PUTM_NON_OWNER  = 4'd5,
+    DEV_PUTE_OWNER      = 4'd6,
+    DEV_PUTE_NON_OWNER  = 4'd7,
+    DEV_DATA            = 4'd8
+  } dir_event_e;
+
+  typedef struct packed {
+    logic illegal;
+    logic stall;
+    logic send_data;          // Data to the requester, carrying AckCount
+    logic send_data_e;        // DataE to the requester
+    logic send_inv_others;    // Inv to every sharer except the requester
+    logic send_fwd_gets;      // Fwd-GetS to the owner
+    logic send_fwd_getm;      // Fwd-GetM to the owner
+    logic send_put_ack;
+    logic add_sharer;         // sharers |= requester
+    logic remove_sharer;      // sharers &= ~requester
+    logic clear_sharers;
+    logic sharers_owner_req;  // sharers = {owner, requester}
+    logic set_owner_req;
+    logic clear_owner;
+    logic copy_data_l2;       // write the message's data into the L2 line
+  } dir_action_t;
+
+  //---------------------------------------------------------------------------
+  // Directory line metadata, stored beside the L2 tag.
+  //---------------------------------------------------------------------------
+  typedef struct packed {
+    logic                      valid;
+    logic [L2_TAG_W-1:0]       tag;
+    dir_state_e                dir_state;
+    logic [NUM_TILES-1:0]      sharers;
+    logic [TILE_ID_W-1:0]      owner;
+    logic                      data_valid;  // L2 copy is current
+  } dir_meta_t;
+
+  //---------------------------------------------------------------------------
   // Core request opcodes driven by req_gen.
   //---------------------------------------------------------------------------
   typedef enum logic [1:0] {
