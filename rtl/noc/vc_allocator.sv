@@ -61,16 +61,19 @@ module vc_allocator
   always_comb begin
     for (int unsigned p = 0; p < NUM_PORTS; p++) begin
       for (int unsigned v = 0; v < VCS_PER_PORT; v++) begin
-        automatic vnet_e vn = vc_to_vnet(VC_SEL_W'(v));
-        vc_cand[p][v]       = '0;
-        vc_cand_valid[p][v] = 1'b0;
-        for (int unsigned k = VCS_PER_VNET; k > 0; k--) begin
-          automatic logic [VC_SEL_W-1:0] idx = vc_index(vn, VC_ID_W'(k - 1));
-          if (!out_vc_busy_i[out_port_i[p][v]][idx]) begin
-            vc_cand[p][v]       = idx;
-            vc_cand_valid[p][v] = 1'b1;
-          end
-        end
+        // The output VC is the SAME index as the input VC, never "the
+        // lowest free one in this vnet". A packet therefore keeps its virtual
+        // channel from injection to ejection, which makes each VC id an
+        // independent XY-routed subnetwork -- deadlock-free on its own, and
+        // first-in-first-out between any pair of tiles that share it.
+        //
+        // The FIFO property is the point. Choosing the lowest free VC gives
+        // better channel utilisation and lets two messages from one sender to
+        // one receiver arrive out of order, which the coherence protocol
+        // cannot survive: a Put-Ack overtaking a forward retires the cache's
+        // transaction before the forward lands. Bug B19, decision D22.
+        vc_cand[p][v]       = VC_SEL_W'(v);
+        vc_cand_valid[p][v] = !out_vc_busy_i[out_port_i[p][v]][VC_SEL_W'(v)];
         eligible[p][v] = req_i[p][v] && vc_cand_valid[p][v];
       end
     end
@@ -187,6 +190,14 @@ module vc_allocator
     a_same_vnet : assert property (@(posedge clk) disable iff (!rst_n)
       (|grant_o[p]) |-> (vc_to_vnet(grant_vc_o[p]) == vc_to_vnet(s1_vc[p])))
       else $error("vc_allocator: input port %0d would move a packet out of its vnet", p);
+
+    // Stronger, and the one the coherence protocol depends on: a packet keeps
+    // its VC index, not merely its vnet. That is what makes each VC id an
+    // independent FIFO subnetwork and stops a Put-Ack overtaking a forward to
+    // the same cache. Bug B19.
+    a_same_vc : assert property (@(posedge clk) disable iff (!rst_n)
+      (|grant_o[p]) |-> (grant_vc_o[p] == s1_vc[p]))
+      else $error("vc_allocator: input port %0d moved a packet from VC %0d to VC %0d -- point-to-point order is no longer guaranteed", p, s1_vc[p], grant_vc_o[p]);
   end
 
   for (genvar o = 0; o < int'(NUM_PORTS); o++) begin : gen_va_out_asserts

@@ -147,22 +147,26 @@ module tile_nic
   logic [VC_SEL_W-1:0]    pk_vc_q  [NUM_VNETS];
   logic [1:0]             pk_beat_q[NUM_VNETS];
 
-  // A free VC within this vnet, for a packet that is about to start.
+  // The VC within this vnet that this tile's packets use. It is a function of
+  // the tile id and nothing else, and it never changes along the path.
+  //
+  // Picking the lowest FREE VC here instead -- which is what this did -- lets
+  // two messages from the same sender to the same receiver travel on
+  // different virtual channels and arrive out of order. The coherence
+  // protocol cannot survive that: a directory sends a forward to a cache and
+  // then, on processing that cache's Put, a Put-Ack to the same cache. If the
+  // Put-Ack overtakes the forward, the cache retires its transaction and the
+  // forward lands in state I, where there is no data left to answer with and
+  // the requester waits forever. Bug B19.
   logic [VC_SEL_W-1:0] pk_free_vc   [NUM_VNETS];
   logic                pk_has_free  [NUM_VNETS];
 
   always_comb begin
     for (int unsigned n = 0; n < NUM_VNETS; n++) begin
-      pk_free_vc[n]  = '0;
-      pk_has_free[n] = 1'b0;
-      for (int unsigned k = VCS_PER_VNET; k > 0; k--) begin
-        automatic logic [VC_SEL_W-1:0] idx =
-            vc_index(vnet_e'(n[VNET_W-1:0]), VC_ID_W'(k - 1));
-        if (!out_vc_busy_q[idx] && out_has_credit[idx]) begin
-          pk_free_vc[n]  = idx;
-          pk_has_free[n] = 1'b1;
-        end
-      end
+      pk_free_vc[n]  = vc_index(vnet_e'(n[VNET_W-1:0]),
+                                src_vc_id(TILE_ID_W'(TILE_ID)));
+      pk_has_free[n] = !out_vc_busy_q[pk_free_vc[n]] &&
+                       out_has_credit[pk_free_vc[n]];
     end
   end
 

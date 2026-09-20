@@ -18,80 +18,15 @@ from tbutil import u
 
 L2 = RTL_DIR / "l2"
 
-# coh_pkg::dir_state_e
-DI, DS, DE, DM, SD = range(5)
-STATE_NAMES = ["I", "S", "E", "M", "S_D"]
+from models.tables import (ACK, DIR_ACTION_FIELDS as ACTION_FIELDS,
+                           DIR_EVENT_NAMES as EVENT_NAMES,
+                           DIR_STATE_NAMES as STATE_NAMES,
+                           REMOVE_ACK, dir_table as _table,
+                           DI, DS, DE, DM, SD,
+                           GETS, GETM, PUTS_NOT_LAST, PUTS_LAST,
+                           PUTM_OWNER, PUTM_NON_OWNER,
+                           PUTE_OWNER, PUTE_NON_OWNER, DATA)
 
-# coh_pkg::dir_event_e
-(GETS, GETM, PUTS_NOT_LAST, PUTS_LAST, PUTM_OWNER, PUTM_NON_OWNER,
- PUTE_OWNER, PUTE_NON_OWNER, DATA) = range(9)
-EVENT_NAMES = ["GetS", "GetM", "PutS(not last)", "PutS(last)",
-               "PutM from owner", "PutM non-owner", "PutE from owner",
-               "PutE non-owner", "Data"]
-
-ACTION_FIELDS = [
-    "illegal", "stall", "send_data", "send_data_e", "send_inv_others",
-    "send_fwd_gets", "send_fwd_getm", "send_put_ack", "add_sharer",
-    "remove_sharer", "clear_sharers", "sharers_owner_req", "set_owner_req",
-    "clear_owner", "copy_data_l2",
-]
-
-ACK = {"send_put_ack"}
-REMOVE_ACK = {"remove_sharer", "send_put_ack"}
-
-
-def _table(enable_e: bool) -> dict:
-    t = {
-        (DI, GETM):            (DM, {"send_data", "set_owner_req"}),
-        (DI, PUTS_NOT_LAST):   (DI, ACK),
-        (DI, PUTS_LAST):       (DI, ACK),
-        (DI, PUTM_NON_OWNER):  (DI, ACK),
-        (DI, PUTE_NON_OWNER):  (DI, ACK),
-
-        (DS, GETS):            (DS, {"send_data", "add_sharer"}),
-        (DS, GETM):            (DM, {"send_data", "send_inv_others",
-                                     "clear_sharers", "set_owner_req"}),
-        (DS, PUTS_NOT_LAST):   (DS, REMOVE_ACK),
-        (DS, PUTS_LAST):       (DI, REMOVE_ACK),
-        (DS, PUTM_NON_OWNER):  (DS, REMOVE_ACK),
-        (DS, PUTE_NON_OWNER):  (DS, REMOVE_ACK),
-
-        (DE, GETS):            (SD, {"send_fwd_gets", "sharers_owner_req",
-                                     "clear_owner"}),
-        (DE, GETM):            (DM, {"send_fwd_getm", "set_owner_req"}),
-        (DE, PUTS_NOT_LAST):   (DE, ACK),
-        (DE, PUTS_LAST):       (DE, ACK),
-        (DE, PUTM_OWNER):      (DI, {"copy_data_l2", "send_put_ack", "clear_owner"}),
-        (DE, PUTM_NON_OWNER):  (DE, ACK),
-        (DE, PUTE_OWNER):      (DI, {"send_put_ack", "clear_owner"}),
-        (DE, PUTE_NON_OWNER):  (DE, ACK),
-
-        (DM, GETS):            (SD, {"send_fwd_gets", "sharers_owner_req",
-                                     "clear_owner"}),
-        (DM, GETM):            (DM, {"send_fwd_getm", "set_owner_req"}),
-        (DM, PUTS_NOT_LAST):   (DM, ACK),
-        (DM, PUTS_LAST):       (DM, ACK),
-        (DM, PUTM_OWNER):      (DI, {"copy_data_l2", "send_put_ack", "clear_owner"}),
-        (DM, PUTM_NON_OWNER):  (DM, ACK),
-        (DM, PUTE_OWNER):      (DM, ACK),
-        (DM, PUTE_NON_OWNER):  (DM, ACK),
-
-        (SD, GETS):            (SD, {"stall"}),
-        (SD, GETM):            (SD, {"stall"}),
-        (SD, PUTS_NOT_LAST):   (SD, REMOVE_ACK),
-        (SD, PUTS_LAST):       (SD, REMOVE_ACK),
-        (SD, PUTM_OWNER):      (SD, REMOVE_ACK),
-        (SD, PUTM_NON_OWNER):  (SD, REMOVE_ACK),
-        (SD, PUTE_OWNER):      (SD, REMOVE_ACK),
-        (SD, PUTE_NON_OWNER):  (SD, REMOVE_ACK),
-        (SD, DATA):            (DS, {"copy_data_l2"}),
-    }
-    # The single arc that E changes.
-    if enable_e:
-        t[(DI, GETS)] = (DE, {"send_data_e", "set_owner_req"})
-    else:
-        t[(DI, GETS)] = (DS, {"send_data", "add_sharer"})
-    return t
 
 
 def _decode(word: int) -> set:

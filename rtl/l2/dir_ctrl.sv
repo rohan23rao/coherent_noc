@@ -381,6 +381,13 @@ module dir_ctrl
     if (act.send_data_e || (act.send_data && (next_dir == DIR_M))) begin
       new_meta.data_valid = 1'b0;
     end
+    // ... and a PutE from that owner is a promise that it never wrote, so the
+    // L2 copy is current again. Without this the flag stays false from the
+    // moment E was granted and never recovers: the line reads correctly, and
+    // is served correctly, right up until a back-invalidation consults the
+    // flag, believes the copy is stale, frees the way WITHOUT writing back,
+    // and loses every store that had been written into it. Bug B21.
+    if (dir_event == DEV_PUTE_OWNER) new_meta.data_valid = 1'b1;
   end
 
   // Sharers to invalidate on an S + GetM: everyone except the requester.
@@ -806,6 +813,18 @@ module dir_ctrl
   // protocol table -- see binv_resp -- so the table's verdict on it is not
   // meaningful and the assertion must not read it. Every OTHER event reaching
   // D_EXEC is a protocol event and the table must have a cell for it.
+  // The invariant B21 violated, checked where it is established rather than
+  // where it is used. A line the directory records as I or S is one no cache
+  // can be holding dirty, so the L2's copy is the only current one and the
+  // flag that says so must be set -- otherwise a back-invalidation is entitled
+  // to drop it. E, M and S_D are the states where a cache may hold something
+  // newer, and there the flag is legitimately clear.
+  a_l2_copy_current : assert property (@(posedge clk) disable iff (!rst_n)
+    (l2_wr_meta_en && l2_wr_meta.valid &&
+     ((l2_wr_meta.dir_state == DIR_I) || (l2_wr_meta.dir_state == DIR_S)))
+      |-> l2_wr_meta.data_valid)
+    else $error("dir_ctrl: bank %0d marked set %0d way %0d as %0d with a stale L2 copy -- a back-invalidation would drop it without writing back", BANK_ID, l2_wr_set, l2_wr_way, l2_wr_meta.dir_state);
+
   a_no_illegal_event : assert property (@(posedge clk) disable iff (!rst_n)
     ((fsm_q == D_EXEC) && !binv_resp) |-> !act.illegal)
     else $error("dir_ctrl: bank %0d took event %0d in state %0d, which the table marks impossible", BANK_ID, dir_event, old_meta_q.dir_state);

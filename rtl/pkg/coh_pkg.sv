@@ -509,6 +509,15 @@ package coh_pkg;
     return vnet_e'(idx[VC_SEL_W-1 : VC_ID_W]);
   endfunction
 
+  // Which VC id, within a virtual network, a tile's packets use. A packet
+  // keeps this id for its whole path, so each id is an independent,
+  // XY-routed subnetwork: deadlock-free on its own, and FIFO between any pair
+  // of tiles that share it. That FIFO property is what the coherence protocol
+  // needs and did not have -- see bug B19 and decision D22.
+  function automatic logic [VC_ID_W-1:0] src_vc_id(input logic [TILE_ID_W-1:0] t);
+    return t[VC_ID_W-1:0];
+  endfunction
+
   function automatic logic [VC_ID_W-1:0] vc_to_id(input logic [VC_SEL_W-1:0] idx);
     return idx[VC_ID_W-1:0];
   endfunction

@@ -335,6 +335,17 @@ module l1_cache
   logic [MSHR_ENTRIES-1:0] vn1_match;
   logic                    vn1_in_mshr;
   logic [MSHR_IDX_W-1:0]   vn1_idx;
+  typedef enum logic [1:0] {
+    V1_IDLE = 2'd0,
+    V1_READ = 2'd1,
+    V1_SEND = 2'd2
+  } vn1_fsm_e;
+
+  vn1_fsm_e              vn1_fsm_q;
+  coh_msg_t              vn1_msg_q;
+  logic [LINE_W-1:0]     vn1_line_q;
+  logic [L1_WAY_W-1:0]   vn1_way_q;
+
   l1_state_e               vn1_state;
   l1_event_e               vn1_event;
   l1_state_e               vn1_next;
@@ -597,6 +608,50 @@ module l1_cache
   assign needs_evict = !s1_hit && s1_victim_ok &&
                        (state_q[s1_set][s1_victim] != L1_I);
 
+  // The VN1 path owns the line it is working on, and S1 must keep off it.
+  //
+  // Both stages read a line's state combinationally and both write it at the
+  // same edge, and S1's writes come later in the always_ff, so S1 wins. Two
+  // ways that goes wrong, both found by the racing stress run and both the
+  // same bug -- B20:
+  //
+  //   * A Fwd-GetS accepted for a line in M in the same cycle as a HIT on that
+  //     line. The forward sends the data away and moves the line to S; S1's
+  //     write puts M back. The cache then evicts with a PutM a line the
+  //     directory has just told everyone is shared, and the Inv that follows
+  //     lands in MI_A, which has no arc for it.
+  //   * A forward accepted for a line that S1 has chosen as its EVICTION
+  //     VICTIM. The eviction reads the pre-update state, so it sends the Put
+  //     for a state the line no longer has.
+  //
+  // The condition is `valid`, not `take`: a forward can sit at the input for
+  // several cycles while the handler finishes an earlier one, and S1 touching
+  // the line during THAT window is the same bug with a wider gap. Using
+  // `take` would also close a combinational loop, since `vn1_take` depends on
+  // retirement, which depends on S1.
+  //
+  // The request replays, which is the right outcome rather than a
+  // convenience: a store must not complete on a line that is being given
+  // away, and on the retry it finds the line in S and issues the GetM that a
+  // store to a shared line is supposed to issue.
+  //
+  // This cannot livelock. A forward is taken within a bounded number of
+  // cycles -- it is blocked only by a response, a retirement or an array
+  // write, none of which a replaying request can sustain -- and once it is
+  // taken the conflict clears.
+  logic s1_vn1_conflict;
+  assign s1_vn1_conflict = vn1_valid_i && vn1_in_array && (vn1_set == s1_set) &&
+                           (s1_hit ? (vn1_way == s1_hit_idx)
+                                   : (vn1_way == s1_victim));
+
+  // The multi-cycle tail of the same rule: while the handler is still reading
+  // the array for a forward it accepted, that line is not a replacement
+  // candidate.
+  logic victim_is_vn1_line;
+  assign victim_is_vn1_line =
+      (vn1_fsm_q != V1_IDLE) && (line_l1_index(vn1_msg_q.addr) == s1_set) &&
+      (vn1_way_q == s1_victim);
+
   assign array_free = !s2_wr_q && !retire_now && !(vn1_take && vn1_needs_array);
 
   // Highest-priority work takes the pipeline's resources, so a core request is
@@ -609,12 +664,14 @@ module l1_cache
   assign s1_needs_txn  = s1_act.send_gets || s1_act.send_getm;
   assign s1_is_upgrade = s1_hit && s1_needs_txn;
 
-  assign s1_resp   = s1_valid_q && s1_act.hit;
+  assign s1_resp   = s1_valid_q && s1_act.hit && !s1_vn1_conflict;
   assign s1_evict  = s1_valid_q && s1_needs_txn && !s1_is_upgrade &&
-                     s1_victim_ok && needs_evict &&
+                     s1_victim_ok && needs_evict && !victim_is_vn1_line &&
+                     !s1_vn1_conflict &&
                      !victim_busy && mshr_alloc_ready && vn0_q_wr_ready;
   assign s1_alloc  = s1_valid_q && s1_needs_txn && !s1_evict &&
                      (s1_is_upgrade || (s1_victim_ok && !needs_evict)) &&
+                     !s1_vn1_conflict &&
                      !mshr_addr_busy && mshr_alloc_ready && vn0_q_wr_ready;
   // A request that triggered an eviction must still REPLAY: issuing the Put
   // only frees the way, it does not serve the request. Excluding s1_evict here
@@ -685,16 +742,6 @@ module l1_cache
   // happened to look up, so the SRAM output is about some other line entirely.
   // The forward therefore takes the array port for a cycle, which is exactly
   // the coherence-over-core priority the deadlock argument requires.
-  typedef enum logic [1:0] {
-    V1_IDLE = 2'd0,
-    V1_READ = 2'd1,
-    V1_SEND = 2'd2
-  } vn1_fsm_e;
-
-  vn1_fsm_e              vn1_fsm_q;
-  coh_msg_t              vn1_msg_q;
-  logic [LINE_W-1:0]     vn1_line_q;
-  logic [L1_WAY_W-1:0]   vn1_way_q;
   logic                  vn1_send_req_q;   // data to the requester
   logic                  vn1_send_dir_q;   // refreshed copy to the directory
   logic                  vn1_send_ack_q;   // Inv-Ack

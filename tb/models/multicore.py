@@ -49,6 +49,18 @@ class MultiCoreDriver:
         self.mismatches = []
         self.offer = [None] * NUM_TILES
 
+        # Racing mode: same-line concurrency is allowed, so the golden atomic
+        # memory no longer has a defined answer for an individual response.
+        # What survives is a weaker but still sound check -- a load must
+        # return a value somebody actually stored to that word, or the initial
+        # zero. It cannot catch a wrong *ordering*; it catches a value that
+        # was never written, which is what a dropped or misrouted data message
+        # produces. Ordering in racing mode is covered by the SWMR checker and
+        # by the assertions, not here.
+        self.racing = False
+        self.plausible = {}      # word address -> set of values ever stored
+        self.load_meta = [dict() for _ in range(NUM_TILES)]
+
     def idle(self):
         d = self.dut
         d.core_req_valid_i.value = 0
@@ -77,6 +89,14 @@ class MultiCoreDriver:
                 self.busy_lines.discard(ln)
                 self.free_tags[t].add(tag)
                 self.completed += 1
+                addr = self.load_meta[t].pop(tag, None)
+                if addr is not None:
+                    ok = self.plausible.get(addr, {0})
+                    if got not in ok:
+                        self.mismatches.append(
+                            f"tile {t} tag {tag}: LD {addr:#x} returned {got:#x}, "
+                            f"which no core ever stored there "
+                            f"({len(ok)} value(s) are possible) [{where}]")
                 # `want is None` means the testbench deliberately declined to
                 # predict this response: the directed race tests issue two
                 # same-line operations at once, where the coherence order is
@@ -90,11 +110,23 @@ class MultiCoreDriver:
                     )
 
     def plan(self, addrs, store_prob=0.45):
-        """Choose one new operation per idle core, respecting line exclusivity."""
+        """Choose one new operation per idle core.
+
+        In the default mode this respects per-line exclusivity, which is what
+        makes the golden model's answer well defined. In racing mode that
+        restriction is lifted: several cores may have operations in flight on
+        one line at once, which is the only way the transient-state forward
+        arcs are reachable at all -- see bug B16, which lived through 10,000
+        random requests precisely because exclusivity hid it.
+        """
         for t in range(NUM_TILES):
             if self.offer[t] is not None or not self.free_tags[t]:
                 continue
-            candidates = [a for a in addrs if line_addr(a) not in self.busy_lines]
+            if self.racing:
+                candidates = addrs
+            else:
+                candidates = [a for a in addrs
+                              if line_addr(a) not in self.busy_lines]
             if not candidates:
                 continue
             addr = self.rng.choice(candidates)
@@ -102,15 +134,27 @@ class MultiCoreDriver:
             tag = min(self.free_tags[t])
             if self.rng.random() < store_prob:
                 wdata = self.rng.randrange(1 << 32)
-                be = self.rng.choice([0xF, 0xF, 0x3, 0x1, 0xC])
-                want = self.gold.store(addr, wdata, be)
+                # Full-word stores only in racing mode: a byte-enabled store's
+                # result depends on what the line held first, which is exactly
+                # what is undefined when two cores race.
+                be = 0xF if self.racing else self.rng.choice(
+                    [0xF, 0xF, 0x3, 0x1, 0xC])
                 ctx = f"ST {addr:#x} be={be:#x}"
                 op = OP_ST
+                if self.racing:
+                    self.plausible.setdefault(addr, {0}).add(wdata)
+                    want = None
+                else:
+                    want = self.gold.store(addr, wdata, be)
             else:
                 wdata, be = 0, 0xF
-                want = self.gold.load(addr)
                 ctx = f"LD {addr:#x}"
                 op = OP_LD
+                if self.racing:
+                    want = None
+                    self.load_meta[t][tag] = addr
+                else:
+                    want = self.gold.load(addr)
             self.free_tags[t].discard(tag)
             self.busy_lines.add(ln)
             self.expected[t][tag] = want

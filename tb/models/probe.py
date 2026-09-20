@@ -26,6 +26,12 @@ watching each controller's decision point:
   L1, VN2 responses  `vn2_event` with the state the response FSM is indexed
                      with, `state_q[vn2_set][vn2_way]`. VN2 is a sink, so the
                      valid alone is the handshake.
+  L1, core requests  `s1_state` / `s1_event` while a request occupies S1, and
+                     `victim_state` with Evict while S1 is choosing a victim.
+                     These are the left three columns of the table and they
+                     are reached only from the core side, so a probe that
+                     watched the network alone would report two thirds of the
+                     cache table as dead.
   Directory          `old_meta_q.dir_state` / `dir_event` while the controller
                      is in D_EXEC, which is where the table is consulted.
 
@@ -62,6 +68,8 @@ DIR_EVENT_NAMES = ["GetS", "GetM", "PutS(not last)", "PutS(last)",
 
 # coh_pkg::msg_type_e, the one the probe names
 MSG_RECALL_ACK = 22
+MSG_RECALL, MSG_RECALL_INV = 12, 13
+_RECALL_TYPES = (MSG_RECALL, MSG_RECALL_INV)
 
 D_EXEC = 4          # dir_ctrl's FSM encoding for "consult the table"
 DIR_STATE_LSB = 7   # dir_meta_t = valid | tag | dir_state | sharers | owner | data_valid
@@ -105,6 +113,10 @@ class ArcProbe:
         self.samples = 0
         self._last_dir = [None] * NUM_TILES
         self._last_vn1 = [None] * NUM_TILES
+        self._last_s1 = [None] * NUM_TILES
+        self._last_ev = [None] * NUM_TILES
+        self.sharers = Counter()
+        self.recalls = 0
 
     @staticmethod
     def _msg_type(d) -> int:
@@ -118,6 +130,8 @@ class ArcProbe:
         for t in range(NUM_TILES):
             l1 = self.l1[t]
             if u(l1.vn1_valid_i):
+                if (u(l1.vn1_msg_i) >> (len(l1.vn1_msg_i) - 5)) in _RECALL_TYPES:
+                    self.recalls += 1
                 arc = (t, u(l1.vn1_state), u(l1.vn1_event))
                 if self._last_vn1[t] != arc:
                     self.l1_arcs[arc] += 1
@@ -133,8 +147,27 @@ class ArcProbe:
                 self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}")
                 self.min_ack[t] = min(self.min_ack[t], _signed(u(l1.vn2_ack_next)))
 
+            if u(l1.s1_valid_q):
+                arc = (t, u(l1.s1_state), u(l1.s1_event))
+                if self._last_s1[t] != arc:
+                    self.l1_arcs[arc] += 1
+                    self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}")
+                self._last_s1[t] = arc
+                if u(l1.needs_evict):
+                    varc = (t, u(l1.victim_state), EV_EVICT)
+                    if self._last_ev[t] != varc:
+                        self.l1_arcs[varc] += 1
+                        self._note(cycle, f"tile {t} L1 {l1_arc_name(varc)}")
+                    self._last_ev[t] = varc
+                else:
+                    self._last_ev[t] = None
+            else:
+                self._last_s1[t] = None
+                self._last_ev[t] = None
+
             d = self.dir[t]
             if u(d.fsm_q) == D_EXEC:
+                self.sharers[bin((u(d.old_meta_q) >> 3) & 0xF).count("1")] += 1
                 # A recall response is handled outside the table, so the
                 # table's event decode for it is meaningless -- see D18.
                 if self._msg_type(d) == MSG_RECALL_ACK:
