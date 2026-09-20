@@ -35,7 +35,8 @@ module l1_mem_tb_top
   input  logic [L1_IDX_W-1:0]         dbg_set_i,
   input  logic [L1_WAY_W-1:0]         dbg_way_i,
   output l1_state_e                   dbg_state_o,
-  output logic [L1_TAG_W-1:0]         dbg_tag_o
+  output logic [L1_TAG_W-1:0]         dbg_tag_o,
+  output logic [MSHR_ENTRIES-1:0]     dbg_mshr_valid_o
 );
 
   logic                   mem_req_valid;
@@ -69,7 +70,8 @@ module l1_mem_tb_top
     .dbg_set_i         (dbg_set_i),
     .dbg_way_i         (dbg_way_i),
     .dbg_state_o       (dbg_state_o),
-    .dbg_tag_o         (dbg_tag_o)
+    .dbg_tag_o         (dbg_tag_o),
+    .dbg_mshr_valid_o  (dbg_mshr_valid_o)
   );
 
   mem_model #(

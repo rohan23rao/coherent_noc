@@ -36,7 +36,8 @@ MAX_ADDR = MEM_LINES * 32   # 32 KB
 
 
 def _sources():
-    return [lib("sram_1rw"), MEM / "mem_model.sv", L1 / "l1_cache.sv",
+    return [lib("sram_1rw"), lib("rr_arbiter"), MEM / "mem_model.sv",
+            L1 / "mshr_file.sv", L1 / "l1_cache.sv",
             HARNESS_DIR / "l1_mem_tb_top.sv"]
 
 

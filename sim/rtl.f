@@ -14,5 +14,6 @@
 ../rtl/noc/router.sv
 ../rtl/noc/noc_top.sv
 ../rtl/mem/mem_model.sv
+../rtl/l1/mshr_file.sv
 ../rtl/l1/l1_cache.sv
 ../rtl/top/system_top.sv

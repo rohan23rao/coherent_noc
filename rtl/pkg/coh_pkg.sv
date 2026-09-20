@@ -242,6 +242,32 @@ package coh_pkg;
   } core_op_e;
 
   //---------------------------------------------------------------------------
+  // MSHR entry.
+  //
+  // ack_cnt is SIGNED and that is load-bearing: Inv-Acks can arrive before the
+  // Data message that carries the AckCount, so the count goes negative first
+  // and is credited back up when Data lands. An unsigned counter wraps to a
+  // huge positive number on the first early ack and the entry never completes.
+  //---------------------------------------------------------------------------
+  typedef struct packed {
+    logic                          valid;
+    logic [LINE_ADDR_W-1:0]        addr;
+    l1_state_e                     state;
+    logic signed [ACK_CNT_W-1:0]   ack_cnt;
+    logic [LINE_W-1:0]             data;
+    logic                          data_valid;   // fill data has arrived
+    core_op_e                      op;
+    logic [WORD_W-1:0]             wdata;
+    logic [BE_W-1:0]               be;
+    logic [WORD_SEL_W-1:0]         word_sel;    // which word of the line the core asked for
+    logic [CORE_TAG_W-1:0]         core_tag;
+    logic [L1_WAY_W-1:0]           victim_way;
+    logic                          needs_wb;     // victim was dirty
+    logic [LINE_ADDR_W-1:0]        wb_addr;      // victim's line address
+    logic [2:0]                    fwd_pend;     // deferred forward, Phase 6+
+  } mshr_e;
+
+  //---------------------------------------------------------------------------
   // Flit. Wormhole with VCs: a control packet is one head+tail flit, a data
   // packet is head + FLITS_PER_LINE body/tail flits.
   //---------------------------------------------------------------------------

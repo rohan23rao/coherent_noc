@@ -198,3 +198,105 @@ every operation including stores. The directed tests deliberately were not
 changed to cover it: the lesson is that a scoreboard comparing *every* response
 against a reference finds things a targeted test does not, and the suite should
 keep demonstrating that.
+
+---
+
+## B5. The replay slot dropped its occupant whenever it could not reissue (Phase 5, RTL)
+
+**Symptom.** Phase 5 tests hung waiting for responses that never came:
+
+```
+AssertionError: 1 responses never arrived: [4]
+AssertionError: 1 responses never arrived: [2]
+```
+
+Always exactly one request, always under MSHR pressure or way-conflict
+pressure, and never the same tag twice.
+
+**Localization.** Timing out on a response means the request is either stuck or
+gone; the MSHR assertions were quiet, so it was not stuck in an MSHR. Dumping
+the pipeline state each cycle made it immediate:
+
+```
+c8  s1v=0 rpl=1 rpladdr=00200 mshrv=1111 fill_gv=1 ready=0
+c9  s1v=0 rpl=0 rpladdr=00200 mshrv=1110 fill_gv=0 ready=1
+```
+
+At c8 the request is parked in the replay slot and the array is busy with a
+fill, so it cannot be reissued. At c9 the slot is simply empty and the request
+has not gone anywhere -- `s1_valid_q` is still 0.
+
+**Root cause.** Two defects in the same mechanism.
+
+First, `rpl_valid_q` was cleared unconditionally at the top of the sequential
+block and only re-set by a *replaying S1 request*. On any cycle where the slot's
+occupant could not be issued into S0 -- because a fill or a committed S2 store
+owned the data array -- nothing re-set it, and the request evaporated.
+
+Second, and found while fixing the first: the slot holds one request, but two
+could be in the replay path at once. A new core request could be accepted into
+S1 on the same cycle the request already in S1 replayed; when the new one later
+replayed in turn, it overwrote the slot's occupant.
+
+**Fix.** The slot now holds its occupant until that request is actually
+reissued (`if (rpl_valid_q && s0_issue) rpl_valid_q <= 1'b0;`), and
+`core_req_ready_o` additionally refuses a new request on any cycle where the S1
+request is about to replay. The second change makes the invariant
+`s1_replay |-> !rpl_valid_q` hold, which is now asserted as
+`a_replay_slot_not_overwritten` -- so the overwrite variant cannot come back
+silently.
+
+**Test that catches it now.**
+`test_l1_nonblocking.py::test_mshr_full_stalls_then_serves` and
+`::test_concurrent_misses_to_one_set_do_not_double_book`, both of which create
+sustained replay pressure. The invariant assertion catches the overwrite variant
+directly.
+
+---
+
+## B6. A store to a line already being evicted was lost twice (Phase 5, RTL)
+
+**Symptom.** The pipelined randomized run disagreed with golden on a load:
+
+```
+tag 3: got 0x0, golden says 0x81 [LD addr=0x4284 op#42]
+```
+
+A byte-enabled store to that word had completed 40-odd operations earlier and
+been acknowledged. Every directed Phase 4 and Phase 5 test passed.
+
+**Localization.** The value read was memory's zero, not the stored byte, so the
+store had been lost rather than reordered. It was a load *hit* returning stale
+data or a *miss* refetching a line whose store never reached memory. Both point
+at the eviction path, and the address was in a set the test deliberately
+oversubscribes. Reading the allocation path with that in mind made it clear
+that the victim line stays `valid` from the moment an MSHR reserves its way
+until the fill lands.
+
+**Root cause.** A window between allocation and fill in which the victim is
+condemned but still serving. A store landing in that window hits the victim,
+writes the data array and marks the line dirty. Meanwhile the MSHR already holds
+the copy of the line captured at allocation -- before the store -- and that is
+what the writeback sends to memory. The fill then overwrites the way. The store
+is lost twice over: the writeback carried the pre-store copy, and the fill
+discarded the post-store copy.
+
+The directed tests missed it because they evict lines they are finished with.
+Only randomized traffic stores to a line during the window in which it is being
+replaced.
+
+**Fix.** The victim is invalidated at allocation, in the same cycle its data
+and address are captured, so it can no longer be hit. That created a second
+ordering requirement, handled at the same time: because the line is now absent,
+a new request for it misses and allocates its own MSHR, and that MSHR's fetch
+must not overtake the still-queued writeback. The memory engine masks a fetch
+whose line address matches any live MSHR's pending `wb_addr`. The MSHR carries
+`wb_addr` explicitly for this reason -- reconstructing it from the tag array is
+no longer safe once the way can be refilled.
+
+**Test that catches it now.**
+`test_l1_nonblocking.py::test_pipelined_random_against_golden`, which stores
+into a footprint chosen so that eviction and re-reference overlap. The directed
+tests were deliberately not extended to cover it: the point worth keeping is
+that a window this narrow is found by randomized traffic against a reference
+model, not by cases a designer thinks to write down.

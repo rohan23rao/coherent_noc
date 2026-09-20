@@ -284,3 +284,90 @@ and at this capacity a 2688-bit SRAM macro would be inefficient anyway. The
 data array, which is 16x larger and where the port pressure actually matters,
 stays `sram_1rw` -- so the discipline of designing the pipeline around a
 one-cycle, no-forwarding, single-port contract is preserved where it counts.
+
+---
+
+## D11. The MSHR does not merge secondary misses
+
+**Decision.** One MSHR per line address, enforced by CAM. A second core request
+to a line that already has a live MSHR replays until that MSHR retires.
+
+**Why.** Merging means the MSHR must hold a list of waiting requests -- each
+with its own word select, byte enables, store data and core tag -- and must
+retire them all when the fill lands, in an order that preserves per-line program
+order. That list is a queue inside every MSHR entry, it needs its own full/empty
+handling, and it multiplies the state a protocol assertion has to cover. In a
+design whose point is a defensible coherence protocol, spending that complexity
+on a throughput optimization is the wrong trade.
+
+Not merging also buys a property that matters more here than throughput:
+**per-line program order is preserved for free.** Because a second request to a
+line cannot be in flight while the first is, the golden model can be applied in
+issue order and every response checked against it -- which is exactly what
+`test_pipelined_random_against_golden` does. With merging, the testbench would
+need its own model of the retirement order to know what each response should be.
+
+**Alternatives considered.**
+
+- *Full merge with a per-entry request queue.* The standard answer, and what a
+  real design does: a load behind a load to the same line costs nothing. Its
+  cost here is the queue, the retirement ordering, and a much larger reachable
+  state space for the Phase 10 race tests.
+- *Merge loads only, stall stores.* Cheaper than a full merge and captures most
+  of the benefit, since load-load to the same line is the common case.
+  Rejected on the same grounds, and because the asymmetry is another case split
+  in the state table.
+
+**Cost.** A secondary miss to a hot line pays a full memory round trip of
+replay latency instead of riding the first fill. For the false-sharing test
+(R10) that is precisely the traffic pattern, so the measured transactions per
+store there will be pessimistic relative to a merging design. That is worth
+saying out loud when quoting the R10 number.
+
+---
+
+## D12. An MSHR reserves its victim way, and invalidates the victim immediately
+
+**Decision.** Allocation picks a victim way that no other live MSHR has
+reserved -- replaying if none is free -- and sets that way's state to `I` in the
+same cycle, capturing the dirty line and its address into the MSHR.
+
+**Why, part one: reservation.** With `MSHR_ENTRIES = 4` and `L1_WAYS = 2`,
+pseudo-LRU flips back after two allocations, so a third concurrent miss to one
+set would be handed a victim way that an earlier MSHR already owns. Two fills
+would then target the same way and one line would be silently lost. Pseudo-LRU
+is a replacement *policy*; it is not an allocator, and treating it as one is the
+bug.
+
+**Why, part two: immediate invalidation.** This is the subtler half, and it was
+bug B6. Leaving the victim valid until its fill arrives looks harmless -- the
+line is still correct, so why not keep serving hits from it? Because a store
+that hits it writes the array and sets the line dirty, while the writeback
+already queued carries the copy captured at allocate time. The fill then
+overwrites the way. The store is lost twice: once because the writeback carried
+stale data, and again because the fill discarded the array copy.
+
+**Consequence that must be handled.** Invalidating the victim means a new
+request for the evicted line *misses* and allocates its own MSHR while the
+writeback may still be queued. Its fetch must not overtake that writeback, or it
+reads pre-writeback memory. The memory engine therefore masks a fetch whose line
+address matches any live MSHR's pending `wb_addr`. This is also why the MSHR
+stores `wb_addr` explicitly rather than reconstructing it from the tag array:
+once the victim is invalidated, the way may be refilled and the tag no longer
+describes the line being written back.
+
+**Alternatives considered.**
+
+- *Keep the victim valid and re-capture the writeback data at writeback time.*
+  Needs an extra array read port, or arbitration against the pipeline, for the
+  read. Rejected: it reintroduces exactly the single-port contention D10 is
+  about, to preserve a handful of hits on a line that is about to disappear.
+- *Keep the victim valid but refuse stores to it.* A read-only state for
+  "resident but condemned". Rejected: it is a fourth stable state to carry
+  through the coherence tables in Phase 6 for no protocol reason.
+
+**Cost.** Hits to a condemned line are lost -- accesses between allocation and
+fill miss and allocate a second MSHR, so a line evicted and immediately
+re-referenced costs two memory round trips instead of one. The replacement
+policy pays for this by not choosing recently-used ways, so the case should be
+rare; the measured stress runs are where that assumption gets tested.
