@@ -346,6 +346,19 @@ package coh_pkg;
     return idx[VC_ID_W-1:0];
   endfunction
 
+  // Rebuild a line address from an L1 tag and set index. The tag is the
+  // non-contiguous {upper, bank} pair (decision D1), so this is the inverse of
+  // addr_l1_tag and must stay in step with it.
+  function automatic logic [LINE_ADDR_W-1:0] l1_line_addr(
+      input logic [L1_TAG_W-1:0] tg, input logic [L1_IDX_W-1:0] idx);
+    return {tg[L1_TAG_W-1 -: L1_UTAG_W], idx, tg[BANK_W-1:0]};
+  endfunction
+
+  // Word select within a line, from the byte offset.
+  function automatic logic [WORD_SEL_W-1:0] addr_word_sel(input logic [ADDR_W-1:0] a);
+    return a[$clog2(WORD_W/8) +: WORD_SEL_W];
+  endfunction
+
   function automatic logic is_stable_l1(input l1_state_e s);
     return (s == L1_I) || (s == L1_S) || (s == L1_E) || (s == L1_M);
   endfunction

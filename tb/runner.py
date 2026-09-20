@@ -29,6 +29,8 @@ SIM_DIR = REPO_ROOT / "sim"
 WAVE_DIR = SIM_DIR / "waves"
 
 PKG = RTL_DIR / "pkg" / "coh_pkg.sv"
+# Testbench-only wiring tops live here, never under rtl/.
+HARNESS_DIR = TB_DIR / "harness"
 
 # The same waiver list `make lint` uses. Passing it here keeps the unit-test
 # build and the lint build honest about exactly the same set of exceptions --

@@ -236,3 +236,51 @@ per-vnet throughput, which is the honest statement of what it costs.
 The mechanism is also why the credit return carries a `credit_tail` bit at all.
 That bit is the only thing distinguishing "a buffer slot freed" from "the packet
 is done", and the two must not be conflated.
+
+---
+
+## D10. L1 tags and coherence state live in flops; only the data lives in SRAM
+
+**Decision.** `l1_cache` keeps `tag_q` and `state_q` as flop arrays (64 sets x 2
+ways: 2688 bits of tag, 512 of state) and instantiates `sram_1rw` only for the
+data array. This is a deliberate departure from the convention that every array
+is an `sram_1rw`.
+
+**Why.** From Phase 6 a snoop -- an `Inv`, a `Fwd-GetS`, a `Fwd-GetM` -- has to
+look up a line's tag and state, and often modify the state, on a line the
+pipeline may be accessing in the same cycle. With a single-ported tag SRAM that
+is a structural conflict on *every* snoop, and the only ways out are to stall
+the pipeline for each one, or to make the coherence response path lose
+arbitration to the core. Stalling the pipeline on every snoop is how a cache
+ends up unable to sink responses, which is exactly the condition the VN2
+sink requirement forbids. A flop array has as many read ports as it has
+readers.
+
+It also makes the debug bus honest. The coherence checker needs `(state, tag)`
+per way every cycle; reading that out of a single-ported SRAM would mean either
+contending with the pipeline or a hierarchical reference into the array. With
+flops it is a genuine module port that survives synthesis-style elaboration,
+which is what the specification asks for.
+
+**Alternatives considered.**
+
+- *Duplicate snoop tag array.* This is what real designs do: a second copy of
+  the tags, in SRAM, dedicated to the snoop port. Rejected only on scale -- at
+  64 sets x 2 ways the duplicate would be the same 2688 bits, so the flop array
+  *is* the duplicate, minus the coherence problem of keeping two SRAMs in step.
+  At 512 sets x 8 ways the calculation inverts and the duplicated SRAM wins.
+- *Single-ported tag SRAM with pipeline stalls on snoop.* Rejected: it couples
+  snoop service time to core activity, and a busy core can then delay an
+  `Inv-Ack` indefinitely. That turns a throughput choice into a liveness
+  problem.
+- *Dual-ported (1R1W) tag macro.* Rejected: substantially larger per bit than
+  1RW, and it solves only the tag conflict while leaving the data array
+  single-ported anyway.
+
+**Cost.** About 3.2 kbit of flops per L1, roughly 12.8 kbit across four tiles,
+against an SRAM implementation of the same bits. Flops are perhaps 6-10x the
+area per bit of a compiled SRAM at this size, so the cost is real but bounded,
+and at this capacity a 2688-bit SRAM macro would be inefficient anyway. The
+data array, which is 16x larger and where the port pressure actually matters,
+stays `sram_1rw` -- so the discipline of designing the pipeline around a
+one-cycle, no-forwarding, single-port contract is preserved where it counts.

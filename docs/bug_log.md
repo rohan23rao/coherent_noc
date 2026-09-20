@@ -154,3 +154,47 @@ as the bug, for a condition I expected to be structurally impossible. It fired
 on the first run of real traffic. That is the argument for writing the
 "can't happen" assertions rather than reasoning that they cannot happen -- the
 same argument the spec makes for R8.
+
+---
+
+## B4. A store returned the pre-store word on a hit and the post-store word on a miss (Phase 4, RTL)
+
+**Symptom.** The randomized Phase 4 run disagreed with the golden model on the
+sixth operation:
+
+```
+op 5: store to 0x6200 returned 0x0, golden says 0x18e00000
+```
+
+The five directed tests before it -- including a store followed by a load of the
+same word, and a store surviving eviction and refill -- all passed.
+
+**Localization.** The disagreement was on the value a *store* returns, not on
+any subsequent load, so the line itself was correct in the array; only the
+response word was wrong. Two paths produce a store response: the hit path in S1
+(`core_resp_rdata_o <= s1_rword`) and the fill path in `M_FILL`
+(`core_resp_rdata_o <= miss_fill_line[...]`). The fill path merges the pending
+store into the line before selecting the word; the hit path selected from
+`s1_hit_line`, which is the line *before* the merge.
+
+**Root cause.** Two code paths implementing the same architectural event had
+drifted apart: a store miss returned the post-store word, a store hit returned
+the pre-store word. The directed tests missed it because none of them checked
+the value a store itself returns -- they checked what a subsequent *load*
+returned, and the array was being written correctly in both cases. Only the
+randomized test, which compares every operation's response against the golden
+model including stores, could see it.
+
+**Fix.** Defined the store response as the word *after* the store, in one place:
+`s1_rword` now selects from `s1_merged` when the operation is a store and from
+`s1_hit_line` otherwise. That makes the hit path agree with the fill path rather
+than the other way round, because the post-store value is the more useful of the
+two -- it lets a scoreboard confirm a store landed without issuing a load, which
+matters once stores can be outstanding.
+
+**Test that catches it now.**
+`test_l1_blocking.py::test_random_against_golden`, which checks the response of
+every operation including stores. The directed tests deliberately were not
+changed to cover it: the lesson is that a scoreboard comparing *every* response
+against a reference finds things a targeted test does not, and the suite should
+keep demonstrating that.
