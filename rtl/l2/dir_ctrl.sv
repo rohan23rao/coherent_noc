@@ -254,7 +254,10 @@ module dir_ctrl
       MSG_WB_DATA: dir_event = DEV_DATA;
       default: begin
         dir_event = DEV_GETS;
-        $error("dir_ctrl: bank %0d received message type %0d it cannot classify", BANK_ID, cur_q.msg_type);
+        // Only meaningful once a message has actually been latched.
+        if (fsm_q == D_EXEC) begin
+          $error("dir_ctrl: bank %0d received message type %0d it cannot classify", BANK_ID, cur_q.msg_type);
+        end
       end
     endcase
   end

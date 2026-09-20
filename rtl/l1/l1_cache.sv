@@ -242,7 +242,12 @@ module l1_cache
       MSG_INV_ACK:    vn2_event = EV_INV_ACK;
       default: begin
         vn2_event = EV_INV_ACK;
-        $error("l1_cache: tile %0d got VN2 message type %0d", tile_id_i, vn2_msg_i.msg_type);
+        // Guarded on valid: the bus is all zeros while idle and during reset,
+        // and message type 0 is a legal VN0 encoding, so an unguarded check
+        // fires before the design has done anything.
+        if (vn2_valid_i) begin
+          $error("l1_cache: tile %0d got VN2 message type %0d", tile_id_i, vn2_msg_i.msg_type);
+        end
       end
     endcase
   end
@@ -375,7 +380,9 @@ module l1_cache
       MSG_PUT_ACK:  vn1_event = EV_PUT_ACK;
       default: begin
         vn1_event = EV_INV;
-        $error("l1_cache: tile %0d got VN1 message type %0d", tile_id_i, vn1_msg_i.msg_type);
+        if (vn1_valid_i) begin
+          $error("l1_cache: tile %0d got VN1 message type %0d", tile_id_i, vn1_msg_i.msg_type);
+        end
       end
     endcase
   end

@@ -43,7 +43,8 @@ def _sources():
         L1 / "l1_coh_fsm.sv", L1 / "mshr_file.sv", L1 / "l1_cache.sv",
         L2 / "dir_coh_fsm.sv", L2 / "l2_bank.sv", L2 / "tbe_file.sv",
         L2 / "dir_ctrl.sv",
-        HARNESS_DIR / "msg_mux.sv", HARNESS_DIR / "coh_direct_top.sv",
+        HARNESS_DIR / "msg_mux.sv", HARNESS_DIR / "msg_delay.sv",
+        HARNESS_DIR / "coh_direct_top.sv",
     ]
 
 
@@ -133,6 +134,9 @@ async def _setup(dut):
     dut.dbg_set_i.value = 0
     dut.dbg_dir_set_i.value = 0
     dut.dbg_dir_way_i.value = 0
+    dut.delay_vn0_i.value = 0
+    dut.delay_vn1_i.value = 0
+    dut.delay_vn2_i.value = 0
     await reset_dut(dut, drive={})
     return c
 

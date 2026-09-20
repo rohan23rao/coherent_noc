@@ -450,3 +450,64 @@ parallelism under conflict pressure is `MSHR_ENTRIES / 2` rather than
 `MSHR_ENTRIES`. That is the honest figure to quote for a conflict-heavy
 footprint, and it is why `test_l1_single_core.py` checks four *non*-conflicting
 misses when it measures peak occupancy.
+
+---
+
+## D15. E is an ownership state, so its eviction is not silent
+
+**Decision.** Evicting a line held in E sends `PutE` and waits for a `Put-Ack`
+in `EI_A`. It is not dropped silently.
+
+**Why.** The directory cannot tell whether a core holding E has upgraded to M,
+because that upgrade is deliberately silent -- and making it silent is the
+entire reason E exists. So when the directory records a line as E at core A, it
+knows exactly one thing: A may or may not have modified it. If A could drop the
+line without saying so, the directory would keep believing A is the owner
+forever, and the next requester would be forwarded to a core that no longer has
+the line.
+
+The two silences are therefore not symmetrical, and the asymmetry is the point:
+**the upgrade is silent because nobody needs to know; the eviction cannot be,
+because the directory does.**
+
+**Alternative considered.** *Silent E eviction, with the directory recovering by
+timeout or by treating a forward to a non-holder as a miss.* This is what a
+protocol without a PutE transaction has to do. Rejected: it turns a clean
+protocol arc into an error-recovery path, and error-recovery paths are the ones
+that never get tested.
+
+**Cost.** One extra transaction on every eviction of a clean exclusive line,
+which is the common case for read-only data that gets replaced. That is a real
+throughput cost, and it is the price of the read-then-write saving E buys on the
+other side. The `PutE` also has to exist as a distinct message type from `PutM`
+so the directory can tell "clean, take nothing" from "dirty, take this data" --
+which is why the message set has both.
+
+---
+
+## D16. The directed race tests force interleavings with a delay hook, never with waiting
+
+**Decision.** `tb/harness/msg_delay.sv` sits on each source's outgoing path and
+holds one message for a programmable number of cycles. A race test sets delays
+to force the exact order it needs.
+
+**Why.** A race reproduced by waiting longer has not been reproduced. Race R5 --
+a Put arriving after ownership has moved -- cannot happen at all unless the Put
+is delayed past a request from another core, and on a direct connection with
+round-robin arbitration it simply never happens by chance. Without the hook the
+test would pass without ever exercising the arc, which is worse than not having
+the test.
+
+The hook is in the harness rather than in `rtl/` so that forcing an interleaving
+never involves changing the design under test.
+
+**Why depth one.** Each element holds exactly one message and backpressures its
+source behind it. A deeper element would let a later message from the same
+source overtake an earlier one, which is not an ordering the protocol is
+required to survive, and it would make failures depend on queue occupancy --
+that is, unreproducible.
+
+**Cost.** One cycle of latency on every message even when the delay is zero,
+since the element registers its payload. That is uniform across all sources, so
+it shifts absolute timings without changing any relative order, and the hook can
+therefore be left in place for every test rather than being a special build.
