@@ -19,6 +19,7 @@ Rules this file exists to keep:
 """
 
 from models.golden import line_addr
+from models.probe import l1_of
 from models.multicore import NUM_TILES, OP_LD, OP_ST
 from tbutil import step, u
 
@@ -110,7 +111,7 @@ async def wait_for(dut, drv, cond, probe=None, max_cycles: int = 4000,
     raise AssertionError(f"{what} never became true within {max_cycles} cycles")
 
 
-def l1_state_in_mshr(dut, probe, tile: int, addr: int):
+def l1_state_in_mshr(dut, tile: int, addr: int):
     """The state the L1 would present to its table for a forward to `addr`.
 
     An evicting line's coherence state lives in its MSHR, not in the tag array,
@@ -122,7 +123,7 @@ def l1_state_in_mshr(dut, probe, tile: int, addr: int):
     from the MSB -- which is why the widths of everything below them do not
     appear: the entry width is taken from the handle.
     """
-    l1 = probe.l1[tile]
+    l1 = l1_of(dut, tile)
     total = len(l1.mshr)
     w = total // MSHR_ENTRIES
     raw = u(l1.mshr)

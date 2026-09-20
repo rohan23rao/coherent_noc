@@ -10,11 +10,19 @@ So every race test asserts a **witness**: the exact table cell the race is
 about was presented to the table during the run. The probe collects those by
 watching each controller's decision point:
 
-  L1, VN1 forwards   `vn1_state` / `vn1_event` on the cycle the forward is
-                     accepted. Read from the controller rather than from the
-                     debug bus because an evicting line's state lives in its
-                     MSHR, not in the tag array -- and MI_A / II_A are exactly
-                     the states races R3, R4 and R8 are about.
+  L1, VN1 forwards   `vn1_state` / `vn1_event` while the forward is PRESENTED,
+                     not while it is accepted. A cell whose action is `stall`
+                     is never accepted, and those cells are half the catalogue
+                     -- IM_AD + Fwd-GetM in R6 is one. Presented is also what
+                     the RTL's own legality assertion samples, so the probe and
+                     the assertion agree on what counts as an event.
+                     Read from the controller rather than from the debug bus
+                     because an evicting line's state lives in its MSHR, not in
+                     the tag array -- and MI_A / II_A are exactly the states
+                     races R3, R4 and R8 are about. A message that stalls for
+                     many cycles presents the same pair every cycle, so
+                     consecutive repeats are collapsed: a count is a number of
+                     distinct presentations, not of cycles.
   L1, VN2 responses  `vn2_event` with the state the response FSM is indexed
                      with, `state_q[vn2_set][vn2_way]`. VN2 is a sink, so the
                      valid alone is the handshake.
@@ -25,6 +33,8 @@ This is a read-only observer over signals that already exist. It adds nothing
 to rtl/ and it cannot change any timing, which matters: a probe that
 backpressured anything would be a timing hack by another name.
 """
+
+from collections import Counter
 
 from models.coherence_checker import STATE_NAMES
 from tbutil import u
@@ -88,12 +98,13 @@ class ArcProbe:
         self.verbose = verbose
         self.l1 = [l1_of(dut, t) for t in range(NUM_TILES)]
         self.dir = [dir_of(dut, t) for t in range(NUM_TILES)]
-        self.l1_arcs = set()      # (tile, l1_state, l1_event)
-        self.dir_arcs = set()     # (tile, dir_state, dir_event)
+        self.l1_arcs = Counter()   # (tile, l1_state, l1_event) -> times seen
+        self.dir_arcs = Counter()  # (tile, dir_state, dir_event) -> times seen
         self.trace = []           # ordered, for failure messages
         self.min_ack = [0] * NUM_TILES
         self.samples = 0
         self._last_dir = [None] * NUM_TILES
+        self._last_vn1 = [None] * NUM_TILES
 
     @staticmethod
     def _msg_type(d) -> int:
@@ -106,14 +117,19 @@ class ArcProbe:
         self.samples += 1
         for t in range(NUM_TILES):
             l1 = self.l1[t]
-            if u(l1.vn1_valid_i) and u(l1.vn1_ready_o):
+            if u(l1.vn1_valid_i):
                 arc = (t, u(l1.vn1_state), u(l1.vn1_event))
-                self.l1_arcs.add(arc)
-                self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}")
+                if self._last_vn1[t] != arc:
+                    self.l1_arcs[arc] += 1
+                    taken = " (stalled)" if not u(l1.vn1_ready_o) else ""
+                    self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}{taken}")
+                self._last_vn1[t] = arc
+            else:
+                self._last_vn1[t] = None
             if u(l1.vn2_valid_i):
                 st = u(l1.state_q[u(l1.vn2_set)][u(l1.vn2_way)])
                 arc = (t, st, u(l1.vn2_event))
-                self.l1_arcs.add(arc)
+                self.l1_arcs[arc] += 1
                 self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}")
                 self.min_ack[t] = min(self.min_ack[t], _signed(u(l1.vn2_ack_next)))
 
@@ -126,7 +142,7 @@ class ArcProbe:
                 arc = (t, (u(d.old_meta_q) >> DIR_STATE_LSB) & 0x7,
                        u(d.dir_event))
                 if self._last_dir[t] != arc:
-                    self.dir_arcs.add(arc)
+                    self.dir_arcs[arc] += 1
                     self._note(cycle, f"tile {t} {dir_arc_name(arc)}")
                 self._last_dir[t] = arc
             else:
@@ -157,6 +173,31 @@ class ArcProbe:
             f"{DIR_STATE_NAMES[state]} + {DIR_EVENT_NAMES[event]}. {why}\n"
             f"{self.summary()}"
         )
+
+    def count_dir(self, tile: int, state: int, event: int) -> int:
+        return self.dir_arcs[(tile, state, event)]
+
+    def count_l1(self, tile: int, state: int, event: int) -> int:
+        return self.l1_arcs[(tile, state, event)]
+
+    def l1_events_in(self, tile: int, state: int) -> set:
+        """Every event the given tile was shown while in `state`."""
+        return {ev for (t, st, ev) in self.l1_arcs if t == tile and st == state}
+
+    def dir_states_for(self, tile: int, event: int) -> set:
+        """Every directory state in which `event` was seen at this bank."""
+        return {st for (t, st, ev) in self.dir_arcs if t == tile and ev == event}
+
+    def require_dir_event(self, tile: int, event: int, why: str):
+        """The event reached the bank, whatever state it found it in.
+
+        Used where the race is about the event arriving late rather than about
+        one particular cell -- R5's stale PutE can legitimately land in E or in
+        M depending on how far the new owner has got.
+        """
+        assert self.dir_states_for(tile, event), (
+            f"the interleaving never happened: bank {tile} was never shown "
+            f"{DIR_EVENT_NAMES[event]} in any state. {why}\n{self.summary()}")
 
     def summary(self) -> str:
         lines = [f"  {'' if c is None else c:>6} {what}"

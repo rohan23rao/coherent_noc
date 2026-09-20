@@ -9,7 +9,10 @@ runs share a body so the comparison is exact rather than approximate.
 from models.coherence_checker import E, I, M, S, STATE_NAMES, SwmrChecker
 from models.golden import line_addr
 from models.multicore import NUM_TILES, OP_LD, OP_ST
+from models import raceutil as ru
 from tbutil import step, u
+
+L1_EI_A = 10   # coh_pkg::l1_state_e
 
 STRIDE = 1 << 13
 
@@ -161,21 +164,23 @@ async def scenario_dirty_read_downgrades(dut, drv, addr=0x0580):
     return "dirty line read: owner downgraded to S, reader in S with the data"
 
 
-async def scenario_r11(dut, drv, a0=0x0600):
+async def scenario_r11(dut, drv, a0=0x0600, probe=None):
     """E, silent upgrade to M, then PutM while the directory still records E."""
     a1, a2 = a0 + STRIDE, a0 + 2 * STRIDE
     dut.dbg_set_i.value = set_of(a0)
 
-    await do_op(drv, 0, OP_LD, a0)
+    await do_op(drv, 0, OP_LD, a0, probe=probe)
     assert state_of(dut, 0, a0) == E, "setup: tile 0 should hold a0 in E"
-    await do_op(drv, 0, OP_ST, a0, wdata=0x11DEAD11)
+    await do_op(drv, 0, OP_ST, a0, wdata=0x11DEAD11, probe=probe)
     assert state_of(dut, 0, a0) == M
-    await do_op(drv, 0, OP_LD, a1)
-    await do_op(drv, 0, OP_LD, a2)
+    await do_op(drv, 0, OP_LD, a1, probe=probe)
+    await do_op(drv, 0, OP_LD, a2, probe=probe)
     for _ in range(40):
         await step(dut)
+        if probe is not None:
+            probe.sample(drv.cycle)
 
-    got = await do_op(drv, 1, OP_LD, a0)
+    got = await do_op(drv, 1, OP_LD, a0, probe=probe)
     assert got == 0x11DEAD11, (
         f"tile 1 read {got:#x}, expected 0x11DEAD11. The directory was in E and "
         f"got a PutM carrying data it did not expect; dropping it loses the "
@@ -184,46 +189,53 @@ async def scenario_r11(dut, drv, a0=0x0600):
     return "R11: silent E->M survived eviction through an unexpected PutM"
 
 
-async def scenario_r5(dut, drv, delay, a0=0x0700, hold=120):
-    """A Put that lands after ownership has moved must not disown the new owner."""
-    a1 = a0 + STRIDE
-    dut.dbg_set_i.value = set_of(a0)
+async def scenario_r5(dut, drv, delay, a0=0x0700, hold=250, probe=None):
+    """R5: a PutE that lands after ownership has moved must not disown the new
+    owner.
 
-    await do_op(drv, 0, OP_LD, a0)
+    The eviction has to be a real one. a0, a1 and a2 all map to the same
+    two-way L1 set, so it is the *third* access that forces a0 out -- an
+    earlier version of this scenario used two lines, never evicted anything,
+    and checked the right values while exercising none of the arc it was named
+    after (bug B17).
+
+    Order: tile 0 takes a0 in E, fills the other way, then evicts a0 with its
+    PutE held in the network. While tile 0 sits in EI_A, tile 1 takes the line
+    for writing. The PutE arrives at a directory whose owner is now tile 1, and
+    the owner check on the Put is the only thing standing between that and
+    silent data loss.
+    """
+    a1, a2 = a0 + STRIDE, a0 + 2 * STRIDE
+    dut.dbg_set_i.value = set_of(a0)
+    want = 0x5A5A0001
+
+    await do_op(drv, 0, OP_LD, a0, probe=probe)
     assert state_of(dut, 0, a0) == E, "setup: tile 0 should hold a0 in E"
+    await do_op(drv, 0, OP_LD, a1, probe=probe)   # other way; a0 is now LRU
 
     delay.set_vn0(0, hold)
+    t2 = ru.issue(drv, 0, OP_LD, a2, note="LD a2, evicts a0")
+    await ru.wait_for(
+        dut, drv, lambda: ru.l1_state_in_mshr(dut, 0, a0) == L1_EI_A, probe,
+        what="tile 0 reaching EI_A with its PutE held")
 
-    tag = min(drv.free_tags[0])
-    drv.free_tags[0].discard(tag)
-    drv.expected[0][tag] = drv.gold.load(a1)
-    drv.ctx[0][tag] = "LD a1"
-    drv.inflight_line[0][tag] = line_addr(a1)
-    drv.offer[0] = (tag, OP_LD, a1, 0, 0xF)
-    for _ in range(14):
-        drv.drive()
-        await step(dut)
-        drv._collect()
-    drv.idle()
-
-    await do_op(drv, 1, OP_ST, a0, wdata=0x5A5A0001)
+    t1 = ru.issue(drv, 1, OP_ST, a0, wdata=want)
+    await ru.wait_done(dut, drv, 1, t1, probe, what="tile 1 store")
     assert state_of(dut, 1, a0) == M, "tile 1 should own a0 for writing"
 
     delay.clear()
-    for _ in range(600):
-        drv.drive()
-        await step(dut)
-        drv._collect()
-    drv.idle()
+    await ru.wait_done(dut, drv, 0, t2, probe, what="tile 0 LD a2")
+    await ru.wait_quiet(dut, drv, probe)
     drv.assert_clean()
+    drv.gold.store(a0, want)
 
-    got = await do_op(drv, 1, OP_LD, a0)
-    assert got == 0x5A5A0001, (
-        f"tile 1 read back {got:#x}, expected 0x5A5A0001. A stale Put from the "
+    got = await do_op(drv, 1, OP_LD, a0, probe=probe)
+    assert got == want, (
+        f"tile 1 read back {got:#x}, expected {want:#x}. A stale Put from the "
         f"previous owner disowned the current one and its store was lost."
     )
-    got2 = await do_op(drv, 2, OP_LD, a0)
-    assert got2 == 0x5A5A0001, (
+    got2 = await do_op(drv, 2, OP_LD, a0, probe=probe)
+    assert got2 == want, (
         f"tile 2 read {got2:#x}; the line the directory hands out no longer "
         f"matches the owner's data"
     )
@@ -262,3 +274,57 @@ async def scenario_random(dut, drv, target=10_000, max_cycles=1_500_000,
         f"only {drv.completed} of {target} completed in {drv.cycle} cycles"
     )
     return (f"{drv.completed} requests over {drv.cycle} cycles; {checker.summary()}")
+
+
+async def scenario_r9(dut, drv, probe=None, base=0x0080, l2_ways=8,
+                      mem_lines=4096):
+    """R9: the L2 evicts a line an L1 holds dirty, and the data must survive.
+
+    Setup, in order, so that the victim is deterministic -- the directory picks
+    the lowest occupied way, which is the first line allocated:
+      1. tile 0 stores to A, so A is in L2 way 0 and in tile 0's L1 in M
+      2. seven more lines fill ways 1..7 of the same L2 set, driven from the
+         other tiles so tile 0's own two-way L1 does not evict A
+      3. a ninth line forces the L2 to evict way 0 -- which is A
+    Step 3 is the race: a shared cache reclaiming a way destroys a private
+    cache's dirty line, and only the recall carries the data out.
+
+    Addresses are strided by 2^13 so that all nine share one L2 set of one
+    bank: the L2 index is addr[12:7] and the bank is addr[6:5].
+    """
+    fillers = [base + (k + 1) * STRIDE for k in range(l2_ways - 1)]
+    trigger = base + l2_ways * STRIDE
+    assert trigger < mem_lines * 32, "footprint escapes the modelled memory"
+
+    dut.dbg_set_i.value = set_of(base)
+
+    await do_op(drv, 0, OP_ST, base, wdata=0xD19E57ED, probe=probe)
+    assert state_of(dut, 0, base) == M, "setup: tile 0 should hold A in M"
+
+    for i, addr in enumerate(fillers):
+        await do_op(drv, 1 + (i % 3), OP_LD, addr, probe=probe)
+
+    assert state_of(dut, 0, base) == M, (
+        "tile 0 lost A while the L2 set was being filled -- the fillers were "
+        "supposed to avoid tile 0's L1"
+    )
+
+    await do_op(drv, 1, OP_LD, trigger, probe=probe)
+    for _ in range(200):
+        await step(dut)
+        if probe is not None:
+            probe.sample(drv.cycle)
+
+    st = state_of(dut, 0, base)
+    assert st == I, (
+        f"tile 0 still holds A in {STATE_NAMES[st]} after the L2 evicted it. "
+        f"The L2 is strictly inclusive: a line it does not hold cannot be "
+        f"resident in any L1."
+    )
+
+    got = await do_op(drv, 2, OP_LD, base, probe=probe)
+    assert got == 0xD19E57ED, (
+        f"tile 2 read {got:#x}, expected 0xD19E57ED. The recall did not carry "
+        f"tile 0's dirty data out, so an acknowledged store was lost."
+    )
+    return "R9: a dirty line recalled by L2 capacity pressure kept its data"

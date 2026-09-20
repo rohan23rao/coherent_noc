@@ -64,58 +64,10 @@ async def _setup(dut, seed=0):
 
 @cocotb.test()
 async def test_r9_back_invalidation_hits_a_line_in_m(dut):
-    """R9: the L2 evicts a line an L1 holds dirty, and the data must survive.
-
-    Setup, in order, so that the victim is deterministic -- the directory picks
-    the lowest occupied way, which is the first line allocated:
-      1. tile 0 stores to A, so A is in L2 way 0 and in tile 0's L1 in M
-      2. seven more lines fill ways 1..7 of the same L2 set, driven from the
-         other tiles so tile 0's own two-way L1 does not evict A
-      3. a ninth line forces the L2 to evict way 0 -- which is A
-    Step 3 is the race: a shared cache reclaiming a way destroys a private
-    cache's dirty line, and only the recall carries the data out.
-    """
+    """R9, over the network. The body is shared with the race catalogue so the
+    two tiers cannot drift; see models/scenarios.scenario_r9."""
     drv = await _setup(dut)
-    base = 0x0080
-    a = base
-    fillers = [base + (k + 1) * L2_STRIDE for k in range(L2_WAYS - 1)]
-    trigger = base + L2_WAYS * L2_STRIDE
-    assert trigger < MEM_LINES * 32, "footprint escapes the modelled memory"
-
-    dut.dbg_set_i.value = sc.set_of(a)
-
-    # 1. tile 0 owns A dirty.
-    await sc.do_op(drv, 0, OP_ST, a, wdata=0xD19E57ED)
-    assert sc.state_of(dut, 0, a) == M, "setup: tile 0 should hold A in M"
-
-    # 2. fill the rest of the L2 set from the other three tiles.
-    for i, addr in enumerate(fillers):
-        await sc.do_op(drv, 1 + (i % 3), OP_LD, addr)
-
-    assert sc.state_of(dut, 0, a) == M, (
-        "tile 0 lost A while the L2 set was being filled -- the fillers were "
-        "supposed to avoid tile 0's L1"
-    )
-
-    # 3. one more line: the L2 must now recall A from tile 0.
-    await sc.do_op(drv, 1, OP_LD, trigger)
-    for _ in range(200):
-        await step(dut)
-
-    st = sc.state_of(dut, 0, a)
-    assert st == I, (
-        f"tile 0 still holds A in {STATE_NAMES[st]} after the L2 evicted it. "
-        f"The L2 is strictly inclusive: a line it does not hold cannot be "
-        f"resident in any L1."
-    )
-
-    # The dirty value must have survived the recall and reached memory.
-    got = await sc.do_op(drv, 2, OP_LD, a)
-    assert got == 0xD19E57ED, (
-        f"tile 2 read {got:#x}, expected 0xD19E57ED. The recall did not carry "
-        f"tile 0's dirty data out, so an acknowledged store was lost."
-    )
-    dut._log.info("R9: a dirty line recalled by L2 capacity pressure kept its data")
+    dut._log.info("%s", await sc.scenario_r9(dut, drv, mem_lines=MEM_LINES))
 
 
 @cocotb.test()
