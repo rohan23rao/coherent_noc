@@ -205,3 +205,48 @@ class ArcProbe:
         head = f"last {len(lines)} of {len(self.trace)} observed arcs " \
                f"({self.samples} cycles sampled):"
         return "\n".join([head] + lines)
+
+
+class LivenessGauge:
+    """Worst observed MSHR and TBE age, against the bounds that assert on them.
+
+    The liveness assertions are the deadlock detector, and a bound is only
+    meaningful if somebody has measured how close normal operation gets to it.
+    A bound that fires at ten times the worst real latency is a detector; one
+    that fires at 1.2x is a flake generator. Reporting both numbers is what
+    turns "the assertion did not fire" into "the assertion did not fire, and
+    here is the margin".
+
+    Sampled every `every` cycles rather than continuously: an age counter
+    increments monotonically while an entry is live, so sampling can miss the
+    peak by at most `every` cycles, and that error is one-sided.
+    """
+
+    def __init__(self, dut, every: int = 16, mshr_bound: int = 1000,
+                 tbe_bound: int = 500):
+        self.dut = dut
+        self.every = every
+        self.mshr_bound = mshr_bound
+        self.tbe_bound = tbe_bound
+        self.mshr_ages = [l1_of(dut, t).u_mshr.age_q for t in range(NUM_TILES)]
+        self.tbe_ages = [dir_of(dut, t).u_tbe.age_q for t in range(NUM_TILES)]
+        self.worst_mshr = 0
+        self.worst_tbe = 0
+        self._n = 0
+
+    def sample(self):
+        self._n += 1
+        if self._n % self.every:
+            return
+        for ages in self.mshr_ages:
+            for i in range(4):
+                self.worst_mshr = max(self.worst_mshr, u(ages[i]))
+        for ages in self.tbe_ages:
+            for i in range(4):
+                self.worst_tbe = max(self.worst_tbe, u(ages[i]))
+
+    def summary(self) -> str:
+        return (f"worst MSHR age {self.worst_mshr} of a {self.mshr_bound}-cycle "
+                f"bound ({self.mshr_bound / max(self.worst_mshr, 1):.0f}x "
+                f"margin); worst TBE age {self.worst_tbe} of {self.tbe_bound} "
+                f"({self.tbe_bound / max(self.worst_tbe, 1):.0f}x)")

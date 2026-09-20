@@ -180,24 +180,28 @@ MUTATIONS = [
         case="test_r7_gets_into_s_d",
     ),
     dict(
-        name="r8-put-ack-keeps-sharer",
+        name="r8-owner-not-reassigned-on-forward",
         race="R8",
         file=DIRFSM,
-        why="R8 is impossible only because the directory forgets a requester "
-            "before acking its Put. Keep the sharer and a forward is generated "
-            "for a cache that has already been acknowledged -- which is the "
-            "forward-into-a-dead-MSHR the L1 asserts against.",
-        find="""          DEV_PUTS_NOT_LAST: begin
+        why="R8 is impossible only because the directory stops naming a cache "
+            "the moment it forwards away from it -- the owner changes when the "
+            "forward is SENT, not when the data lands. Leave the old owner in "
+            "place and the next request is forwarded to a cache that has "
+            "already given the line up and is sitting in II_A: exactly the "
+            "forward into a dead MSHR the L1 asserts is impossible.",
+        find="""          DEV_GETM: begin
+            // Stays in M; the owner simply changes. This is how two
+            // back-to-back GetMs are serialized (race R6).
             action_o = '0;
-            action_o.remove_sharer = 1'b1;
-            action_o.send_put_ack  = 1'b1;
-          end
-          DEV_PUTS_LAST: begin""",
-        replace="""          DEV_PUTS_NOT_LAST: begin
+            action_o.send_fwd_getm = 1'b1;
+            action_o.set_owner_req = 1'b1;
+          end""",
+        replace="""          DEV_GETM: begin
+            // Stays in M; the owner simply changes. This is how two
+            // back-to-back GetMs are serialized (race R6).
             action_o = '0;
-            action_o.send_put_ack  = 1'b1;
-          end
-          DEV_PUTS_LAST: begin""",
+            action_o.send_fwd_getm = 1'b1;
+          end""",
         test=RACE_TESTS,
         case="test_r8_no_forward_into_a_dead_mshr",
     ),
@@ -205,12 +209,17 @@ MUTATIONS = [
         name="r9-drop-recalled-dirty-data",
         race="R9",
         file=DIR,
-        why="A recall that brings dirty data back and then does not write it "
-            "to memory loses an acknowledged store with no other symptom.",
-        find="""          binv_data_q    <= cur_q.data;
-          binv_wb_pend_q <= 1'b1;""",
-        replace="""          binv_data_q    <= cur_q.data;
-          binv_wb_pend_q <= 1'b0;""",
+        why="The recall response is the only copy of the owner's stores. "
+            "Writing back the L2's own stale line instead -- which is what "
+            "happens if the response's data is not captured -- loses every "
+            "store made since the line was handed out, with no other symptom.",
+        find="""            if (cur_q.msg_type == MSG_WB_DATA) begin
+              binv_data_q    <= cur_q.data;
+              binv_wb_pend_q <= 1'b1;
+            end""",
+        replace="""            if (cur_q.msg_type == MSG_WB_DATA) begin
+              binv_wb_pend_q <= 1'b1;
+            end""",
         test=RACE_TESTS,
         case="test_r9_back_invalidation_hits_m",
     ),

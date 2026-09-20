@@ -16,6 +16,7 @@ WAVE_DIR   := $(CURDIR)/waves
 VERILATOR  ?= $(shell test -x /opt/verilator/bin/verilator \
                 && echo /opt/verilator/bin/verilator || echo verilator)
 PYTEST     ?= python3 -m pytest
+PYTHON     ?= python3
 
 TOP        ?= system_top
 
@@ -155,12 +156,11 @@ endif
 # Mutation testing. Populated in Phase 10-11: each mutation is a single-line RTL
 # edit plus the test that must fail because of it.
 #------------------------------------------------------------------------------
+# Break one protocol arc at a time and require its named test to notice.
+# `make mutate MUT=<name>` runs one; `make mutate RACE=R3` runs a race's set.
 mutate:
-	@if [ -x $(SCRIPTS)/mutate.sh ]; then \
-	  $(SCRIPTS)/mutate.sh; \
-	else \
-	  echo "mutate: no mutation set registered yet (arrives in Phase 10)"; \
-	fi
+	@$(PYTHON) $(SCRIPTS)/mutate.py \
+	  $(if $(MUT),--only $(MUT),) $(if $(RACE),--race $(RACE),)
 
 clean:
 	rm -rf obj_dir sim_build $(WAVE_DIR)/*.vcd $(WAVE_DIR)/*.fst

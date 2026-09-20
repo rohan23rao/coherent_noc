@@ -25,7 +25,8 @@ module tile_top
   parameter int unsigned MEM_LINES = 1024,
   parameter int unsigned MEM_LAT   = 8,
   parameter bit          ENABLE_E  = 1'b1,
-  parameter int unsigned TBE_TO    = TBE_TIMEOUT
+  parameter int unsigned TBE_TO    = TBE_TIMEOUT,
+  parameter int unsigned MSHR_TO   = MSHR_TIMEOUT
 ) (
   input  logic                      clk,
   input  logic                      rst_n,
@@ -88,7 +89,7 @@ module tile_top
   logic     d_vn0_iv,  d_vn0_ir;   coh_msg_t d_vn0_im;
   logic     d_vn2_iv,  d_vn2_ir;   coh_msg_t d_vn2_im;
 
-  l1_cache u_l1 (
+  l1_cache #(.MSHR_TO (MSHR_TO)) u_l1 (
     .clk (clk), .rst_n (rst_n), .tile_id_i (TILE_ID_W'(TILE_ID)),
     .core_req_valid_i (core_req_valid_i), .core_req_ready_o (core_req_ready_o),
     .core_op_i (core_op_i), .core_addr_i (core_addr_i),

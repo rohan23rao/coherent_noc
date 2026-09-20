@@ -24,7 +24,9 @@ module coh_direct_top
 #(
   parameter int unsigned MEM_LINES     = 1024,
   parameter int unsigned MEM_LATENCY_P = 8,
-  parameter bit          ENABLE_E      = 1'b0
+  parameter bit          ENABLE_E      = 1'b0,
+  parameter int unsigned TBE_TO        = TBE_TIMEOUT,
+  parameter int unsigned MSHR_TO       = MSHR_TIMEOUT
 ) (
   input  logic                                     clk,
   input  logic                                     rst_n,
@@ -90,7 +92,7 @@ module coh_direct_top
   coh_msg_t [NUM_TILES-1:0] d_vn2o_msg;
 
   for (genvar t = 0; t < int'(NUM_TILES); t++) begin : gen_tile
-    l1_cache u_l1 (
+    l1_cache #(.MSHR_TO (MSHR_TO)) u_l1 (
       .clk (clk), .rst_n (rst_n), .tile_id_i (TILE_ID_W'(t)),
       .core_req_valid_i (core_req_valid_i[t]),
       .core_req_ready_o (core_req_ready_o[t]),
@@ -120,7 +122,8 @@ module coh_direct_top
     logic [LINE_W-1:0]      mem_req_wdata, mem_resp_rdata;
     logic                   mem_resp_valid;
 
-    dir_ctrl #(.BANK_ID (t), .ENABLE_E (ENABLE_E)) u_dir (
+    dir_ctrl #(.BANK_ID (t), .ENABLE_E (ENABLE_E),
+               .TBE_TIMEOUT_P (TBE_TO)) u_dir (
       .clk (clk), .rst_n (rst_n),
       .vn0_valid_i (d_vn0_valid[t]), .vn0_ready_o (d_vn0_ready[t]),
       .vn0_msg_i   (d_vn0_msg[t]),

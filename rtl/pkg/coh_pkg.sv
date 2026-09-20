@@ -388,11 +388,16 @@ package coh_pkg;
   // outlives TBE_TIMEOUT means something it is waiting for is never coming,
   // which is a deadlock however it is dressed up.
   //---------------------------------------------------------------------------
-  // Fixed at 16 bits rather than derived from TBE_TIMEOUT, because the bound
+  // Fixed at 16 bits rather than derived from the timeout, because the bound
   // is a module parameter that a configuration may raise: deriving the counter
   // width from the default silently truncates the comparison and the assertion
   // then fires at `bound mod 2**width` instead of at the bound.
-  localparam int unsigned TBE_AGE_W = 16;
+  //
+  // The counter itself is NOT part of this struct. It exists only so an
+  // assertion can read it, so it lives inside the `ifndef SYNTHESIS` block of
+  // the file that checks it -- a structure that carries a field the design
+  // never reads invites somebody to use it.
+  localparam int unsigned AGE_W = 16;
 
   typedef struct packed {
     logic                        valid;
@@ -401,7 +406,6 @@ package coh_pkg;
     logic [L2_WAY_W-1:0]         way;
     logic [TILE_ID_W-1:0]        requester;
     logic signed [ACK_CNT_W-1:0] ack_cnt;
-    logic [TBE_AGE_W-1:0]        age;
   } tbe_e;
 
   //---------------------------------------------------------------------------

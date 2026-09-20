@@ -21,7 +21,13 @@
 
 module mshr_file
   import coh_pkg::*;
-(
+#(
+  // The liveness bound, as a parameter rather than a constant: raising it is
+  // how a suspected deadlock is told apart from a slow path. If the run
+  // completes with the bound at ten times the default, it was latency; if it
+  // still fires, it was a deadlock. That measurement is what settled B14.
+  parameter int unsigned TIMEOUT = MSHR_TIMEOUT
+) (
   input  logic                          clk,
   input  logic                          rst_n,
 
@@ -170,6 +176,40 @@ module mshr_file
   end
 
 `ifndef SYNTHESIS
+  // Verification-only state: how long each entry has been live. The cache
+  // never reads it, so it is not part of mshr_e.
+  logic [AGE_W-1:0] age_q [MSHR_ENTRIES];
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      for (int unsigned i = 0; i < MSHR_ENTRIES; i++) begin
+        age_q[i] <= '0;
+      end
+    end else begin
+      for (int unsigned i = 0; i < MSHR_ENTRIES; i++) begin
+        age_q[i] <= mshr_q[i].valid ? (age_q[i] + AGE_W'(1)) : '0;
+      end
+      if (alloc_valid_i && alloc_ready_o) begin
+        age_q[alloc_idx_o] <= '0;
+      end
+    end
+  end
+
+  for (genvar i = 0; i < int'(MSHR_ENTRIES); i++) begin : gen_mshr_asserts
+    // The cache-side deadlock detector, and the counterpart of the TBE bound
+    // at the directory. Between them they cover both ends of every
+    // transaction: nothing can be stuck without one of them firing.
+    //
+    // A deadlock does not produce a wrong value, it produces silence, so the
+    // detector has to be an assertion that fires inside the design rather
+    // than a testbench giving up after N cycles. A testbench watchdog says
+    // "something did not finish"; this says which entry, on which line, in
+    // which cache, on the cycle the bound was crossed.
+    a_mshr_liveness : assert property (@(posedge clk) disable iff (!rst_n)
+      mshr_q[i].valid |-> (age_q[i] < AGE_W'(TIMEOUT)))
+      else $error("mshr_file: entry %0d for line %0h has been live %0d cycles, exceeding the liveness bound -- whatever it is waiting for is not coming", i, mshr_q[i].addr, age_q[i]);
+  end
+
   // Two live MSHRs on one line means two fills racing to write the same way.
   a_no_duplicate_address : assert property (@(posedge clk) disable iff (!rst_n)
     $onehot0(cam_hit))

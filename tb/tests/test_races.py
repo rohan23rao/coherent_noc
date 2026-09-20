@@ -23,7 +23,7 @@ from cocotb.clock import Clock
 from models.coherence_checker import E, I, M, S, STATE_NAMES
 from models.multicore import NUM_TILES, OP_LD, OP_ST, MultiCoreDriver
 from models.net_delay import NetDelay
-from models.probe import (ArcProbe, DEV_DATA, DEV_GETM, DEV_GETS,
+from models.probe import (ArcProbe, LivenessGauge, DEV_DATA, DEV_GETM, DEV_GETS,
                           DEV_PUTM_NON_OWNER, DEV_PUTM_OWNER, DEV_PUTS_LAST,
                           DEV_PUTS_NOT_LAST, DEV_PUTE_NON_OWNER, DIR_E, DIR_I,
                           DIR_M, DIR_S, DIR_S_D, EV_DATA_DIR_AGT0, EV_FWD_GETM,
@@ -606,40 +606,68 @@ async def test_r12_blocked_vn0_does_not_stop_vn1_vn2(dut):
     This is the failure that separate virtual networks exist to prevent, and
     the one that survived every direct-connect test: a request that cannot
     make progress holds a virtual channel, and if anything shared -- an
-    allocator, an ejection port, a credit pool -- lets that block the response
+    allocator, an ejection port, a credit pool -- lets that block what is
     behind it, the responses that would have unblocked the request never
-    arrive. The liveness assertions on the MSHR and the TBE are the detector;
-    a deadlock here does not produce a wrong value, it produces silence.
+    arrive.
+
+    A deadlock here does not produce a wrong value, it produces silence, so
+    the detector has to be an assertion inside the design rather than the
+    testbench giving up. With the allocator's eligibility filter removed (the
+    mutation for this race) the run stops on
+
+        mshr_file.sv: entry 0 for line d1c has been live 1000 cycles,
+        exceeding the liveness bound
+
+    naming the cache, the entry and the line. The test's own timeout would
+    only have said that something did not finish.
     """
     drv, delay, probe = await _setup(dut, seed=0xC12)
-    # Every line homed at one bank, and few enough of them that all four cores
-    # collide constantly -- so VN0 into that bank stays saturated while VN1
-    # forwards and VN2 responses have to cross the same links.
-    hot = [ru.addr_of(bank=0, set_=s, tag=12) for s in range(6)]
+    # Three things have to hold at once, and getting any of them wrong makes
+    # this a test that passes against a knowingly broken allocator:
+    #
+    #  1. Every line is homed at ONE bank, so VN0 toward that bank saturates
+    #     and its output virtual channels really are all busy.
+    #  2. There are still enough distinct lines to keep every core's MSHRs
+    #     full. The testbench allows one operation per line, so too few lines
+    #     throttles the stimulus instead of the network -- and a network that
+    #     never fills cannot starve anything. Sixteen lines across eight sets
+    #     is the smallest footprint that keeps all four cores busy while still
+    #     colliding constantly.
+    #  3. The collisions matter as much as the load: they are what generate
+    #     the VN1 forwards and VN2 acks that leave a tile through the same
+    #     router input as its blocked VN0. A saturated VN0 on its own proves
+    #     nothing, because the failure being tested is VN0 starving the OTHER
+    #     virtual networks, not VN0 being slow.
+    hot = [ru.addr_of(bank=0, set_=s, tag=t, word=w)
+           for s in range(8) for t in (12, 13) for w in (0, 2)]
     dut.dbg_set_i.value = sc.set_of(hot[0])
+    gauge = LivenessGauge(dut)
 
-    # One tile's requests are held for a long time, so a VN0 packet is parked
-    # in the network the whole run rather than merely being slow.
-    delay.set_vn0(2, 200)
+    # And the bank is made slow to drain. Holding one cache's responses keeps
+    # a TBE live at the bank, and the directory stalls VN0 head-of-line while
+    # a TBE is live. That turns "VN0 toward this bank is busy" into "VN0
+    # toward this bank is stopped", which is what fills its channels and keeps
+    # them full.
+    delay.set_vn2(3, 40)
 
-    target = 600
-    for _ in range(200_000):
+    target = 4000
+    for _ in range(400_000):
         if drv.completed >= target:
             break
-        if drv.outstanding() < 16:
-            drv.plan(hot, store_prob=0.5)
-        await ru.tick(dut, drv, probe)
+        if drv.outstanding() < 24:
+            drv.plan(hot, store_prob=0.6)
+        await ru.tick(dut, drv, gauge=gauge)
     delay.clear()
-    await ru.wait_quiet(dut, drv, probe, max_cycles=20_000)
+    await ru.wait_quiet(dut, drv, max_cycles=40_000, gauge=gauge)
 
     drv.assert_clean()
     assert drv.completed >= target, (
         f"only {drv.completed} of {target} requests completed in {drv.cycle} "
         f"cycles with one source held -- forward progress was lost")
     dut._log.info(
-        "R12: %d requests over %d cycles into one bank with a VN0 source held "
-        "200 cycles; every MSHR and TBE retired inside its liveness bound",
-        drv.completed, drv.cycle)
+        "R12: %d requests over %d cycles, all homed at one bank with a cache's "
+        "responses held 40 cycles; %s",
+        drv.completed, drv.cycle, gauge.summary())
 
 
 @pytest.mark.protocol

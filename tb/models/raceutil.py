@@ -46,15 +46,17 @@ def home_of(addr: int) -> int:
     return (addr >> 5) & 0x3
 
 
-async def tick(dut, drv, probe=None, n: int = 1, cycle0: int = 0):
+async def tick(dut, drv, probe=None, n: int = 1, gauge=None):
     """Advance n cycles, driving pending offers and collecting responses."""
-    for i in range(n):
+    for _ in range(n):
         drv.drive()
         await step(dut)
         drv.cycle += 1
         drv._collect()
         if probe is not None:
             probe.sample(drv.cycle)
+        if gauge is not None:
+            gauge.sample()
 
 
 def issue(drv, tile: int, op: int, addr: int, wdata: int = 0, be: int = 0xF,
@@ -85,12 +87,12 @@ async def wait_done(dut, drv, tile: int, tag: int, probe=None,
     )
 
 
-async def wait_quiet(dut, drv, probe=None, max_cycles: int = 8000):
+async def wait_quiet(dut, drv, probe=None, max_cycles: int = 8000, gauge=None):
     """Run until nothing is outstanding anywhere."""
     for _ in range(max_cycles):
         if drv.outstanding() == 0:
             return
-        await tick(dut, drv, probe)
+        await tick(dut, drv, probe, gauge=gauge)
     raise AssertionError(
         f"{drv.outstanding()} operation(s) still outstanding after "
         f"{max_cycles} cycles"

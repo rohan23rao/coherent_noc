@@ -85,12 +85,6 @@ module tbe_file
         tbe_q[i] <= '0;
       end
     end else begin
-      for (int unsigned i = 0; i < TBE_ENTRIES; i++) begin
-        if (tbe_q[i].valid) begin
-          tbe_q[i].age <= tbe_q[i].age + TBE_AGE_W'(1);
-        end
-      end
-
       if (free_valid_i) begin
         tbe_q[free_idx_i].valid <= 1'b0;
         tbe_q[free_idx_i].state <= TBE_INVALID;
@@ -107,17 +101,35 @@ module tbe_file
         tbe_q[alloc_idx_o].way       <= alloc_way_i;
         tbe_q[alloc_idx_o].requester <= alloc_requester_i;
         tbe_q[alloc_idx_o].ack_cnt   <= alloc_ack_cnt_i;
-        tbe_q[alloc_idx_o].age       <= '0;
       end
     end
   end
 
 `ifndef SYNTHESIS
+  // Verification-only state: how long each entry has been live. The design
+  // never reads it, so it is not in tbe_e.
+  logic [AGE_W-1:0] age_q [TBE_ENTRIES];
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      for (int unsigned i = 0; i < TBE_ENTRIES; i++) begin
+        age_q[i] <= '0;
+      end
+    end else begin
+      for (int unsigned i = 0; i < TBE_ENTRIES; i++) begin
+        age_q[i] <= tbe_q[i].valid ? (age_q[i] + AGE_W'(1)) : '0;
+      end
+      if (alloc_valid_i && alloc_ready_o) begin
+        age_q[alloc_idx_o] <= '0;
+      end
+    end
+  end
+
   for (genvar i = 0; i < int'(TBE_ENTRIES); i++) begin : gen_tbe_asserts
     // The directory-side deadlock detector. A real assertion, not a warning.
     a_tbe_liveness : assert property (@(posedge clk) disable iff (!rst_n)
-      tbe_q[i].valid |-> (tbe_q[i].age < TBE_AGE_W'(TIMEOUT)))
-      else $error("tbe_file: entry %0d for line %0h has been live %0d cycles, exceeding the liveness bound -- whatever it is waiting for is not coming", i, tbe_q[i].addr, tbe_q[i].age);
+      tbe_q[i].valid |-> (age_q[i] < AGE_W'(TIMEOUT)))
+      else $error("tbe_file: entry %0d for line %0h has been live %0d cycles, exceeding the liveness bound -- whatever it is waiting for is not coming", i, tbe_q[i].addr, age_q[i]);
   end
 
   a_no_duplicate_address : assert property (@(posedge clk) disable iff (!rst_n)

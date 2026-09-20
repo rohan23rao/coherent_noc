@@ -57,7 +57,9 @@
 
 module l1_cache
   import coh_pkg::*;
-(
+#(
+  parameter int unsigned MSHR_TO = MSHR_TIMEOUT
+) (
   input  logic                        clk,
   input  logic                        rst_n,
   input  logic [TILE_ID_W-1:0]        tile_id_i,
@@ -191,7 +193,7 @@ module l1_cache
 
   mshr_e [MSHR_ENTRIES-1:0]   mshr;
 
-  mshr_file u_mshr (
+  mshr_file #(.TIMEOUT (MSHR_TO)) u_mshr (
     .clk (clk), .rst_n (rst_n),
     .alloc_valid_i (mshr_alloc_valid), .alloc_ready_o (mshr_alloc_ready),
     .alloc_addr_i (mshr_alloc_addr), .alloc_state_i (mshr_alloc_state),

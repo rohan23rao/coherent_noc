@@ -22,6 +22,7 @@ module system_top
   parameter int unsigned MEM_LAT     = 8,
   parameter bit          ENABLE_E    = 1'b1,
   parameter int unsigned TBE_TO      = TBE_TIMEOUT,
+  parameter int unsigned MSHR_TO     = MSHR_TIMEOUT,
   parameter int unsigned CYCLE_CNT_W = 48
 ) (
   input  logic                                     clk,
@@ -86,7 +87,8 @@ module system_top
       .MEM_LINES (MEM_LINES),
       .MEM_LAT   (MEM_LAT),
       .ENABLE_E  (ENABLE_E),
-      .TBE_TO    (TBE_TO)
+      .TBE_TO    (TBE_TO),
+      .MSHR_TO   (MSHR_TO)
     ) u_tile (
       .clk (clk), .rst_n (rst_n),
       .core_req_valid_i (core_req_valid_i[t]),
