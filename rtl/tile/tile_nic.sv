@@ -284,7 +284,7 @@ module tile_nic
   end
 
   logic vn2_out_to_dir;
-  assign vn2_out_to_dir = (ej_msg[2].msg_type == MSG_WB_DATA);
+  assign vn2_out_to_dir = vn2_consumer_is_dir(ej_msg[2].msg_type);
 
   // Valid outputs are computed in a block that reads NO ready input. That
   // separation is not cosmetic: an L1 legitimately derives its vn1_ready_o

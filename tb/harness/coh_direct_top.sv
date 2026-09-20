@@ -251,14 +251,23 @@ module coh_direct_top
   logic [VN2_SRC-1:0] vn2_sel_l1  [NUM_TILES];
   logic [VN2_SRC-1:0] vn2_sel_dir [NUM_TILES];
 
+  // Selection and grant-collection are separate blocks on purpose. Written as
+  // one, the block both drives vn2_sel_* (which feeds the muxes) and reads
+  // vn2_to_*_grant (which the muxes drive), and Verilator has to treat the
+  // whole block as one node -- a false combinational loop through the
+  // selection logic. The dependency really is sel -> mux -> grant; splitting
+  // the block says so.
   always_comb begin
     for (int unsigned d = 0; d < NUM_TILES; d++) begin
       for (int unsigned s = 0; s < VN2_SRC; s++) begin
-        automatic logic for_dir = (vn2_src_msg[s].msg_type == MSG_WB_DATA);
+        automatic logic for_dir = vn2_consumer_is_dir(vn2_src_msg[s].msg_type);
         vn2_sel_l1[d][s]  = !for_dir && (vn2_src_msg[s].dst == TILE_ID_W'(d));
         vn2_sel_dir[d][s] =  for_dir && (vn2_src_msg[s].dst == TILE_ID_W'(d));
       end
     end
+  end
+
+  always_comb begin
     for (int unsigned t = 0; t < NUM_TILES; t++) begin
       d_vn2o_ready[t]  = 1'b0;
       l1_vn2o_ready[t] = 1'b0;

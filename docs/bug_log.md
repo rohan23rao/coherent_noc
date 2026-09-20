@@ -610,3 +610,62 @@ hit 8000.
 `test_protocol_noc.py::test_random_over_network`, via the TBE liveness
 assertion. This is the bug that most justifies having that assertion at all:
 nothing else in the suite would have distinguished "deadlocked" from "slow".
+
+---
+
+## B15. An Inv-Ack for a recall was delivered to the wrong agent in its own tile (Phase 9, RTL)
+
+**Symptom.** `test_protocol_inclusion.py::test_back_invalidation_of_a_shared_line`
+tripped an L1 assertion rather than failing a check:
+
+```
+[10841001] %Error: l1_cache.sv:1023: Assertion failed in
+  system_top.gen_tile[0].u_tile.u_l1.a_vn2_always_lands:
+  l1_cache: tile 0 got a VN2 response for line 8 with no MSHR
+  -- the response has nowhere to go
+```
+
+The dirty-victim case (R9 proper) passed. Only the *shared* victim failed, and
+only in tile 0.
+
+**How it was localized.** Line 8 is address `0x100`, the shared victim; its
+home bank is `addr[6:5] == 0`, so the directory doing the recall lives in
+**tile 0**, and tile 0's L1 was one of the two sharers. That coincidence is the
+whole bug. The recall sends an invalidation to each sharer naming the directory
+as requester, so tile 0's L1 correctly answered `Inv-Ack` addressed to tile 0 --
+and the message came back to the tile that had to decide which of its two
+agents should receive it.
+
+**Root cause.** `tile_nic` classified an arriving VN2 response by message type:
+
+```systemverilog
+assign vn2_out_to_dir = (ej_msg[2].msg_type == MSG_WB_DATA);
+```
+
+That is a *function of the type*, which is the right shape of rule -- the
+network interface sees a flit, not a transaction, and has no way to ask who is
+waiting for it. The defect is that back-invalidation broke the property the
+rule depends on. Until Phase 9 every `Inv-Ack` answered a *cache* that was
+acquiring the line, so "Inv-Ack goes to the L1" was sound. A recall makes the
+*directory* the thing being acknowledged, and now one type has two possible
+consumers. Every Inv-Ack for a recall went to the L1, which had no MSHR for a
+line it was not requesting.
+
+Note what did *not* go wrong: routing between tiles was correct, and the
+directory's ack counter simply never decremented. Had `a_vn2_always_lands` not
+existed, the symptom would have been a TBE liveness timeout hundreds of cycles
+later, in a different module.
+
+**Fix.** Restore the invariant instead of special-casing the tile. Back
+-invalidation of a sharer now sends `MSG_RECALL_INV`, which maps to the same
+`EV_INV` arc in the L1 table, and the L1 answers it with `MSG_RECALL_ACK`
+addressed to `home_of(addr)`. The classification moved into `coh_pkg` as
+`vn2_consumer_is_dir()` so the network interface and the direct-connect harness
+cannot disagree, and so that "the consumer of a VN2 message is determined by
+its type alone" is written down in one place -- see decision D18.
+
+**Test that catches it now.**
+`test_protocol_inclusion.py::test_back_invalidation_of_a_shared_line`. It is
+specifically a *shared* victim whose home bank is co-located with one of its
+sharers; a victim in M never exercises the path, because that reply is WB-Data,
+which was already classified correctly.

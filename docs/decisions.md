@@ -511,3 +511,71 @@ that is, unreproducible.
 since the element registers its payload. That is uniform across all sources, so
 it shifts absolute timings without changing any relative order, and the hook can
 therefore be left in place for every test rather than being a special build.
+
+---
+
+## D17. Back-invalidation reuses the Fwd-GetM and Inv arcs, and adds no L1 state
+
+**Decision.** When the L2 must free a way, it recalls the line from the caches
+using messages that map onto arcs the L1 table already has: `MSG_RECALL` is
+decoded as `EV_FWD_GETM` (owner case) and `MSG_RECALL_INV` as `EV_INV` (sharer
+case). The L1 gains no new state, no new event column and no new transition.
+
+**Alternatives.** A data-carrying `Inv` -- one message that both invalidates and
+extracts the line -- would have been one message type instead of two. A
+dedicated `Recall`/`RecallAck` pair with its own column in the L1 table would
+have made the cache's behaviour explicit at the cost of 13 new cells.
+
+**Why.** From the cache's point of view a recall is *exactly* a Fwd-GetM: give
+up the line, hand over the data, go to I. Every transient case the table already
+handles -- a recall arriving while the line is in `MI_A`, or in `SM_AD` waiting
+for acks -- is handled correctly for free, and correctly for the same reason.
+Thirteen new cells would each have been a place to get one of those cases wrong,
+and the directed tests for the transient ones are the hardest to write.
+
+A data-carrying `Inv` was rejected because it collapses two different things --
+"stop using this line" and "send me your copy" -- into one message whose meaning
+depends on the receiver's state. That is the kind of type the sharer case then
+has to answer with an empty payload.
+
+**Cost.** Two message types rather than one, and a directory that must know
+which of the two replies to expect (`WB-Data` from an owner, `Recall-Ack` from a
+sharer) rather than counting one uniform response. That cost is paid in
+`dir_ctrl`, in a single counter, and not in the protocol table.
+
+---
+
+## D18. The in-tile consumer of a VN2 response is a function of its message type
+
+**Decision.** A tile hosts both an L1 and a directory bank, and both receive VN2
+responses. `tile_nic` decides which one an arriving response is for by calling
+`coh_pkg::vn2_consumer_is_dir()` on its type -- nothing else. A recall therefore
+gets its own acknowledgement type, `MSG_RECALL_ACK`, rather than reusing
+`MSG_INV_ACK`.
+
+**Alternatives.** (a) Carry an explicit destination-agent bit in the head flit
+and let the sender say where the message is going. (b) Have the network
+interface look the address up -- if this tile is the home bank for it, the
+message is for the directory. (c) Offer the message to the L1 and fall back to
+the directory if no MSHR matches.
+
+**Why.** (b) is wrong outright: a cache in a home tile requests lines it is the
+home for, so the address does not distinguish the two agents. (c) makes delivery
+depend on a lookup in the receiver's state, which turns a routing question into
+a race -- and the fallback path is precisely what the `a_vn2_always_lands`
+assertion exists to forbid.
+
+(a) is defensible and is what a larger design would do. It was rejected because
+it puts a field in every flit to disambiguate exactly one message type, and
+because the sender setting it correctly is then an invariant with no single
+place to check. The type-based rule is one function, and its correctness
+condition is a sentence: *no VN2 message type has two possible consumers*. Bug
+B15 was that sentence being false, and once it is written as a function in the
+package, the network interface and the direct-connect harness cannot drift apart
+about it.
+
+**Cost.** One extra message type per ambiguous case, forever. If a later phase
+adds a response that both agents can receive, it must be split in two rather
+than tagged -- and the pressure on the 5-bit type field is real (23 of 32
+encodings are now used). The alternative was one bit in every flit; this is one
+encoding per case, and it is the cheaper trade while cases are rare.

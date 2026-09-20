@@ -222,6 +222,7 @@ package coh_pkg;
     MSG_INV        = 5'd10,
     MSG_PUT_ACK    = 5'd11,
     MSG_RECALL     = 5'd12,  // back-invalidation; reuses the Fwd-GetM arc at L1
+    MSG_RECALL_INV = 5'd13,  // back-invalidation of a sharer; reuses the Inv arc
 
     // ---- VN2: responses (never stalls) ----
     MSG_DATA_DIR   = 5'd16,  // data from directory, carries AckCount
@@ -229,7 +230,8 @@ package coh_pkg;
     MSG_DATA_OWNER = 5'd18,  // data forwarded owner -> requester
     MSG_INV_ACK    = 5'd19,
     MSG_WB_DATA    = 5'd20,  // owner/L1 data back to the directory
-    MSG_MEM_DATA   = 5'd21   // memory -> directory fill
+    MSG_MEM_DATA   = 5'd21,  // memory -> directory fill
+    MSG_RECALL_ACK = 5'd22   // Inv-Ack for a recall; answers the directory
   } msg_type_e;
 
   //---------------------------------------------------------------------------
@@ -527,7 +529,7 @@ package coh_pkg;
       MSG_GETS, MSG_GETM, MSG_PUTS, MSG_PUTM, MSG_PUTE,
       MSG_MEM_READ, MSG_MEM_WRITE:                       return VN0_REQ;
       MSG_FWD_GETS, MSG_FWD_GETM, MSG_INV, MSG_PUT_ACK,
-      MSG_RECALL:                                        return VN1_FWD;
+      MSG_RECALL, MSG_RECALL_INV:                        return VN1_FWD;
       default:                                           return VN2_RSP;
     endcase
   endfunction
@@ -538,6 +540,21 @@ package coh_pkg;
     unique case (t)
       MSG_PUTM, MSG_MEM_WRITE, MSG_DATA_DIR, MSG_DATA_E,
       MSG_DATA_OWNER, MSG_WB_DATA, MSG_MEM_DATA:         return 1'b1;
+      default:                                           return 1'b0;
+    endcase
+  endfunction
+
+  // Which agent inside a tile consumes a VN2 response. Every other virtual
+  // network has a fixed consumer -- VN0 is always for the directory, VN1 always
+  // for the cache -- but VN2 carries both data to a requesting cache and
+  // recall responses to a home bank, and the two can be addressed to the same
+  // tile. The rule has to be a function of the message TYPE and nothing else:
+  // the network interface sees a flit, not a transaction, and cannot ask who
+  // is waiting. That is why a recall gets its own ack type instead of reusing
+  // Inv-Ack -- see bug B15.
+  function automatic logic vn2_consumer_is_dir(input msg_type_e t);
+    unique case (t)
+      MSG_WB_DATA, MSG_RECALL_ACK, MSG_MEM_DATA:         return 1'b1;
       default:                                           return 1'b0;
     endcase
   endfunction

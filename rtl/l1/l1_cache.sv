@@ -375,8 +375,9 @@ module l1_cache
     unique case (vn1_msg_i.msg_type)
       MSG_FWD_GETS: vn1_event = EV_FWD_GETS;
       MSG_FWD_GETM: vn1_event = EV_FWD_GETM;
-      MSG_RECALL:   vn1_event = EV_FWD_GETM;   // reuses the Fwd-GetM arc
-      MSG_INV:      vn1_event = EV_INV;
+      MSG_RECALL:     vn1_event = EV_FWD_GETM; // reuses the Fwd-GetM arc
+      MSG_INV:        vn1_event = EV_INV;
+      MSG_RECALL_INV: vn1_event = EV_INV;      // reuses the Inv arc
       MSG_PUT_ACK:  vn1_event = EV_PUT_ACK;
       default: begin
         vn1_event = EV_INV;
@@ -712,12 +713,28 @@ module l1_cache
     vn2_msg_new.requester = tile_id_i;
     vn2_msg_new.data      = vn1_line_q;
     if (vn1_send_ack_q) begin
-      vn2_msg_new.msg_type = MSG_INV_ACK;
-      vn2_msg_new.dst      = vn1_msg_q.requester;
+      // Same arc, two different askers: an Inv comes from a cache that is
+      // getting the line, a Recall-Inv from the home bank that is taking the
+      // way back. The ack has to say which, because the tile that receives it
+      // may host both and the network interface routes on type alone.
+      vn2_msg_new.msg_type = (vn1_msg_q.msg_type == MSG_RECALL_INV)
+                             ? MSG_RECALL_ACK : MSG_INV_ACK;
+      vn2_msg_new.dst      = (vn1_msg_q.msg_type == MSG_RECALL_INV)
+                             ? home_of(vn1_msg_q.addr) : vn1_msg_q.requester;
       vn2_msg_new.data     = '0;
     end else if (vn1_send_req_q) begin
-      vn2_msg_new.msg_type = MSG_DATA_OWNER;
-      vn2_msg_new.dst      = vn1_msg_q.requester;
+      if (vn1_msg_q.msg_type == MSG_RECALL) begin
+        // A Recall reuses the Fwd-GetM arc in the state table -- the cache
+        // gives the line up and answers with data exactly as it would to a
+        // real Fwd-GetM. What differs is who is asking: the directory is
+        // reclaiming the line for itself, so the reply is WB-Data addressed to
+        // the home bank, not owner-data addressed to a requesting cache.
+        vn2_msg_new.msg_type = MSG_WB_DATA;
+        vn2_msg_new.dst      = home_of(vn1_msg_q.addr);
+      end else begin
+        vn2_msg_new.msg_type = MSG_DATA_OWNER;
+        vn2_msg_new.dst      = vn1_msg_q.requester;
+      end
     end else begin
       // The directory's refreshed copy. It must be sent unconditionally on a
       // Fwd-GetS from E or M, because the directory cannot tell whether this

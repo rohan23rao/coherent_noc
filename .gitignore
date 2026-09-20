@@ -10,6 +10,7 @@ work/
 
 # cocotb / pytest
 results.xml
+*.result.xml
 __pycache__/
 *.py[cod]
 .pytest_cache/

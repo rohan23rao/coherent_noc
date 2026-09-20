@@ -154,18 +154,24 @@ module dir_ctrl
   logic [TBE_IDX_W-1:0]        tbe_lookup_idx;
   logic                        tbe_free_valid;
   logic [TBE_IDX_W-1:0]        tbe_free_idx;
+  tbe_e [TBE_ENTRIES-1:0]      tbe;
 
   //---------------------------------------------------------------------------
   // Controller state
   //---------------------------------------------------------------------------
-  typedef enum logic [2:0] {
-    D_IDLE     = 3'd0,
-    D_LOOK     = 3'd1,
-    D_MEM_REQ  = 3'd2,
-    D_MEM_WAIT = 3'd3,
-    D_EXEC     = 3'd4,
-    D_WRDATA   = 3'd5,
-    D_SEND     = 3'd6
+  typedef enum logic [3:0] {
+    D_IDLE     = 4'd0,
+    D_LOOK     = 4'd1,
+    D_MEM_REQ  = 4'd2,
+    D_MEM_WAIT = 4'd3,
+    D_EXEC     = 4'd4,
+    D_WRDATA   = 4'd5,
+    D_SEND     = 4'd6,
+    D_BINV     = 4'd7,   // back-invalidation: set up the recall
+    D_BSEND    = 4'd8,   // send the Invs / Recall
+    D_BWB      = 4'd9,   // write the recalled dirty line back to memory
+    D_BFREE    = 4'd10,  // release the way and the TBE
+    D_MEM_WAIT_WB = 4'd11
   } dir_fsm_e;
 
   dir_fsm_e                 fsm_q;
@@ -183,6 +189,21 @@ module dir_ctrl
   logic                     send_fwd_getm_q;
   logic [ACK_FIELD_W-1:0]   ack_count_q;
   dir_meta_t                new_meta_q;
+
+  // Back-invalidation. The L2 is strictly inclusive, so freeing a way means
+  // first removing the line from every L1 that holds it. The victim's copies
+  // are recalled with Inv to each sharer, or a Recall to the owner -- which
+  // reuses the Fwd-GetM arc at the cache rather than inventing a data-carrying
+  // Inv (decision D17).
+  logic [L2_WAY_W-1:0]      binv_way_q;
+  dir_meta_t                binv_meta_q;
+  logic [NUM_TILES-1:0]     binv_inv_pend_q;
+  logic                     binv_recall_pend_q;
+  logic                     binv_wb_pend_q;   // dirty data owed to memory
+  logic [LINE_W-1:0]        binv_data_q;      // the victim's line, for memory
+  logic [LINE_ADDR_W-1:0]   binv_addr_q;
+  logic [TBE_IDX_W-1:0]     binv_tbe_idx_q;
+  logic [TBE_IDX_W-1:0]     tbe_alloc_idx;
 
   //---------------------------------------------------------------------------
   // Selection and lookup
@@ -221,6 +242,42 @@ module dir_ctrl
   assign hit           = |hit_way_mask;
   assign have_free_way = |free_way_mask;
 
+  // A way whose line has a live TBE must never be chosen as a victim: that
+  // line is already mid-transaction and evicting it would strand whatever it
+  // is waiting for. Asserted below.
+  logic [L2_WAYS-1:0]  victim_ok_mask;
+  logic                have_victim;
+  logic [L2_WAY_W-1:0] victim_way;
+  logic                binv_active_here;
+
+  always_comb begin
+    for (int unsigned w = 0; w < L2_WAYS; w++) begin
+      automatic logic [LINE_ADDR_W-1:0] wl =
+          {l2_meta[w].tag, cur_set_q, BANK_W'(BANK_ID)};
+      automatic logic busy = 1'b0;
+      for (int unsigned i = 0; i < TBE_ENTRIES; i++) begin
+        if (tbe[i].valid && (tbe[i].addr == wl)) begin
+          busy = 1'b1;
+        end
+      end
+      victim_ok_mask[w] = l2_meta[w].valid && !busy;
+    end
+    have_victim = |victim_ok_mask;
+    victim_way  = '0;
+    for (int unsigned w = L2_WAYS; w > 0; w--) begin
+      if (victim_ok_mask[w - 1]) victim_way = L2_WAY_W'(w - 1);
+    end
+    // Is a back-invalidation already running for this set? If so the request
+    // that triggered it simply waits rather than starting a second one.
+    binv_active_here = 1'b0;
+    for (int unsigned i = 0; i < TBE_ENTRIES; i++) begin
+      if (tbe[i].valid && (tbe[i].state == TBE_INV_PEND) &&
+          (line_l2_index(tbe[i].addr) == cur_set_q)) begin
+        binv_active_here = 1'b1;
+      end
+    end
+  end
+
   always_comb begin
     hit_way  = '0;
     free_way = '0;
@@ -244,6 +301,19 @@ module dir_ctrl
                           (old_meta_q.owner == cur_q.src);
   assign is_last_sharer = ((old_meta_q.sharers & ~req_bit) == '0);
 
+  // A recall response is a VN2 message for a line whose TBE is mid
+  // back-invalidation. It bypasses the protocol table entirely: the directory
+  // is reclaiming its own line, not serving anybody's request.
+  logic binv_resp;
+  assign binv_resp = (fsm_q == D_EXEC) && tbe_lookup_hit &&
+                     (tbe[tbe_lookup_idx].state == TBE_INV_PEND) &&
+                     ((cur_q.msg_type == MSG_RECALL_ACK) ||
+                      (cur_q.msg_type == MSG_WB_DATA));
+
+  logic binv_last_resp;
+  assign binv_last_resp = binv_resp &&
+                          ($signed(tbe[tbe_lookup_idx].ack_cnt) <= 1);
+
   always_comb begin
     dir_event = DEV_GETS;
     unique case (cur_q.msg_type)
@@ -255,8 +325,10 @@ module dir_ctrl
       MSG_WB_DATA: dir_event = DEV_DATA;
       default: begin
         dir_event = DEV_GETS;
-        // Only meaningful once a message has actually been latched.
-        if (fsm_q == D_EXEC) begin
+        // Only meaningful once a message has actually been latched, and
+        // only for messages the table is supposed to classify: a recall
+        // response is handled outside it.
+        if ((fsm_q == D_EXEC) && !binv_resp) begin
           $error("dir_ctrl: bank %0d received message type %0d it cannot classify", BANK_ID, cur_q.msg_type);
         end
       end
@@ -326,6 +398,32 @@ module dir_ctrl
   end
 
   //---------------------------------------------------------------------------
+  // Back-invalidation helpers
+  //---------------------------------------------------------------------------
+  logic [TILE_ID_W-1:0]  binv_inv_idx;
+  logic [ACK_CNT_W-1:0]  binv_expect;
+  logic [LINE_ADDR_W-1:0] binv_victim_addr;
+
+  always_comb begin
+    binv_inv_idx = '0;
+    for (int unsigned t = NUM_TILES; t > 0; t--) begin
+      if (binv_inv_pend_q[t - 1]) binv_inv_idx = TILE_ID_W'(t - 1);
+    end
+    // How many responses the recall will produce.
+    binv_expect = '0;
+    if (binv_meta_q.dir_state == DIR_S) begin
+      for (int unsigned t = 0; t < NUM_TILES; t++) begin
+        if (binv_meta_q.sharers[t]) binv_expect = binv_expect + ACK_CNT_W'(1);
+      end
+    end else if ((binv_meta_q.dir_state == DIR_E) ||
+                 (binv_meta_q.dir_state == DIR_M)) begin
+      binv_expect = ACK_CNT_W'(1);
+    end
+  end
+
+  assign binv_victim_addr = {binv_meta_q.tag, cur_set_q, BANK_W'(BANK_ID)};
+
+  //---------------------------------------------------------------------------
   // Outgoing messages
   //---------------------------------------------------------------------------
   logic [TILE_ID_W-1:0] inv_target_idx;
@@ -342,9 +440,11 @@ module dir_ctrl
   logic send_vn1_now;
 
   assign send_vn2_now = (fsm_q == D_SEND) && (send_data_q || send_data_e_q);
-  assign send_vn1_now = (fsm_q == D_SEND) && !send_vn2_now &&
-                        (send_put_ack_q || send_fwd_gets_q || send_fwd_getm_q ||
-                         (|inv_pend_q));
+  assign send_vn1_now = ((fsm_q == D_SEND) && !send_vn2_now &&
+                         (send_put_ack_q || send_fwd_gets_q || send_fwd_getm_q ||
+                          (|inv_pend_q)))
+                        || ((fsm_q == D_BSEND) &&
+                            ((|binv_inv_pend_q) || binv_recall_pend_q));
 
   always_comb begin
     vn2_valid_o = send_vn2_now;
@@ -366,7 +466,19 @@ module dir_ctrl
     vn1_msg_o.requester = cur_q.src;
     vn1_msg_o.data      = '0;
     vn1_msg_o.ack_count = '0;
-    if (send_put_ack_q) begin
+    if (fsm_q == D_BSEND) begin
+      // The recall names the DIRECTORY as requester, so the acks and the data
+      // come back here rather than to some cache.
+      vn1_msg_o.addr      = binv_victim_addr;
+      vn1_msg_o.requester = TILE_ID_W'(BANK_ID);
+      if (|binv_inv_pend_q) begin
+        vn1_msg_o.msg_type = MSG_RECALL_INV;
+        vn1_msg_o.dst      = binv_inv_idx;
+      end else begin
+        vn1_msg_o.msg_type = MSG_RECALL;
+        vn1_msg_o.dst      = binv_meta_q.owner;
+      end
+    end else if (send_put_ack_q) begin
       vn1_msg_o.msg_type = MSG_PUT_ACK;
       vn1_msg_o.dst      = cur_q.src;
     end else if (send_fwd_gets_q) begin
@@ -384,10 +496,12 @@ module dir_ctrl
   //---------------------------------------------------------------------------
   // Memory
   //---------------------------------------------------------------------------
-  assign mem_req_valid_o = (fsm_q == D_MEM_REQ);
-  assign mem_req_addr_o  = cur_q.addr;
-  assign mem_req_we_o    = 1'b0;
-  assign mem_req_wdata_o = '0;
+  always_comb begin
+    mem_req_valid_o = (fsm_q == D_MEM_REQ) || (fsm_q == D_BWB);
+    mem_req_addr_o  = (fsm_q == D_BWB) ? binv_addr_q : cur_q.addr;
+    mem_req_we_o    = (fsm_q == D_BWB);
+    mem_req_wdata_o = binv_data_q;
+  end
 
   //---------------------------------------------------------------------------
   // Array write ports
@@ -420,6 +534,16 @@ module dir_ctrl
       l2_wr_data_en = 1'b1;
       l2_wr_meta    = new_meta_q;
       l2_wr_data    = cur_q.data;
+    end else if (fsm_q == D_BFREE) begin
+      // Release the way: the line is gone from every L1 and from memory's
+      // point of view it is up to date.
+      l2_wr_meta_en = 1'b1;
+      l2_wr_way     = binv_way_q;
+      l2_wr_meta    = '0;
+    end else if (binv_resp) begin
+      // A recall response never touches metadata; the way is released in
+      // D_BFREE once every copy is accounted for.
+      l2_wr_meta_en = 1'b0;
     end else if ((fsm_q == D_EXEC) && !act.stall && !tbe_needed_but_full &&
                  !act.illegal && !act.copy_data_l2) begin
       // The COMBINATIONAL new_meta, not the register: new_meta_q is loaded at
@@ -435,7 +559,7 @@ module dir_ctrl
   // Queue pop
   //---------------------------------------------------------------------------
   logic commit;
-  assign commit = (fsm_q == D_SEND) && !send_vn2_now && !send_vn1_now;
+  assign commit = ((fsm_q == D_SEND) && !send_vn2_now && !send_vn1_now) || binv_resp;
 
   assign vn2_q_rd_ready = commit && cur_from_vn2_q;
   assign vn0_q_rd_ready = commit && !cur_from_vn2_q;
@@ -443,15 +567,21 @@ module dir_ctrl
   //---------------------------------------------------------------------------
   // TBE wiring
   //---------------------------------------------------------------------------
-  assign tbe_alloc_valid     = tbe_needed && tbe_alloc_ready;
-  assign tbe_alloc_state     = TBE_WB_PEND;
-  assign tbe_alloc_addr      = cur_q.addr;
-  assign tbe_alloc_way       = cur_way_q;
-  assign tbe_alloc_requester = cur_q.src;
-  assign tbe_free_valid      = (fsm_q == D_EXEC) && !act.stall && !act.illegal &&
-                               (old_meta_q.dir_state == DIR_S_D) && act.copy_data_l2 &&
-                               tbe_lookup_hit;
-  assign tbe_free_idx        = tbe_lookup_idx;
+  logic binv_alloc;
+  assign binv_alloc = (fsm_q == D_BINV);
+
+  assign tbe_alloc_valid     = (tbe_needed && tbe_alloc_ready) || binv_alloc;
+  assign tbe_alloc_state     = binv_alloc ? TBE_INV_PEND : TBE_WB_PEND;
+  assign tbe_alloc_addr      = binv_alloc ? binv_victim_addr : cur_q.addr;
+  assign tbe_alloc_way       = binv_alloc ? binv_way_q : cur_way_q;
+  assign tbe_alloc_requester = binv_alloc ? TILE_ID_W'(BANK_ID) : cur_q.src;
+  logic binv_free;
+  assign binv_free = (fsm_q == D_BFREE);
+
+  assign tbe_free_valid      = ((fsm_q == D_EXEC) && !act.stall && !act.illegal &&
+                                (old_meta_q.dir_state == DIR_S_D) && act.copy_data_l2 &&
+                                tbe_lookup_hit && !binv_resp) || binv_free;
+  assign tbe_free_idx        = binv_free ? binv_tbe_idx_q : tbe_lookup_idx;
 
   tbe_file #(.TIMEOUT (TBE_TIMEOUT_P)) u_tbe (
     .clk               (clk),
@@ -462,16 +592,16 @@ module dir_ctrl
     .alloc_addr_i      (tbe_alloc_addr),
     .alloc_way_i       (tbe_alloc_way),
     .alloc_requester_i (tbe_alloc_requester),
-    .alloc_ack_cnt_i   ('0),
-    .alloc_idx_o       (),
+    .alloc_ack_cnt_i   (binv_alloc ? binv_expect : '0),
+    .alloc_idx_o       (tbe_alloc_idx),
     .lookup_addr_i     (cur_q.addr),
     .lookup_hit_o      (tbe_lookup_hit),
     .lookup_idx_o      (tbe_lookup_idx),
-    .ack_dec_valid_i   (1'b0),
-    .ack_dec_idx_i     ('0),
+    .ack_dec_valid_i   (binv_resp),
+    .ack_dec_idx_i     (tbe_lookup_idx),
     .free_valid_i      (tbe_free_valid),
     .free_idx_i        (tbe_free_idx),
-    .entries_o         ()
+    .entries_o         (tbe)
   );
 
   //---------------------------------------------------------------------------
@@ -494,6 +624,14 @@ module dir_ctrl
       send_fwd_getm_q <= 1'b0;
       ack_count_q     <= '0;
       new_meta_q      <= '0;
+      binv_way_q         <= '0;
+      binv_meta_q        <= '0;
+      binv_inv_pend_q    <= '0;
+      binv_recall_pend_q <= 1'b0;
+      binv_wb_pend_q     <= 1'b0;
+      binv_data_q        <= '0;
+      binv_addr_q        <= '0;
+      binv_tbe_idx_q     <= '0;
     end else begin
       unique case (fsm_q)
         D_IDLE: begin
@@ -506,15 +644,81 @@ module dir_ctrl
         end
 
         D_LOOK: begin
-          cur_line_q <= l2_data[hit ? hit_way : free_way];
+          cur_line_q <= l2_data[hit ? hit_way : (have_free_way ? free_way : victim_way)];
           if (hit) begin
             cur_way_q  <= hit_way;
             old_meta_q <= l2_meta[hit_way];
             fsm_q      <= D_EXEC;
-          end else begin
+          end else if (have_free_way) begin
             cur_way_q <= free_way;
             fsm_q     <= D_MEM_REQ;
+          end else if (binv_active_here) begin
+            // Someone is already clearing a way in this set. Leave the request
+            // at the head of VN0 and retry; it will find the way free.
+            fsm_q <= D_IDLE;
+          end else begin
+            // Strictly inclusive L2: the way cannot be reused until every L1
+            // copy of the victim is gone.
+            binv_way_q  <= victim_way;
+            binv_meta_q <= l2_meta[victim_way];
+            fsm_q       <= D_BINV;
           end
+        end
+
+        D_BINV: begin
+          binv_addr_q    <= binv_victim_addr;
+          binv_data_q    <= cur_line_q;
+          binv_tbe_idx_q <= tbe_alloc_idx;
+          // Set up the recall. The victim's copies must go before its way can
+          // be reused; how many responses to wait for depends on who holds it.
+          if (binv_meta_q.dir_state == DIR_S) begin
+            binv_inv_pend_q    <= binv_meta_q.sharers;
+            binv_recall_pend_q <= 1'b0;
+          end else if ((binv_meta_q.dir_state == DIR_E) ||
+                       (binv_meta_q.dir_state == DIR_M)) begin
+            binv_inv_pend_q    <= '0;
+            binv_recall_pend_q <= 1'b1;
+          end else begin
+            // Nobody holds it: the way can be freed without talking to anyone.
+            binv_inv_pend_q    <= '0;
+            binv_recall_pend_q <= 1'b0;
+          end
+          binv_wb_pend_q <= binv_meta_q.data_valid;
+          fsm_q <= D_BSEND;
+        end
+
+        D_BSEND: begin
+          if (|binv_inv_pend_q) begin
+            if (vn1_ready_i) begin
+              binv_inv_pend_q[binv_inv_idx] <= 1'b0;
+            end
+          end else if (binv_recall_pend_q) begin
+            if (vn1_ready_i) begin
+              binv_recall_pend_q <= 1'b0;
+            end
+          end else if (binv_expect == '0) begin
+            // Nothing was outstanding, so there is nothing to wait for.
+            fsm_q <= binv_wb_pend_q ? D_BWB : D_BFREE;
+          end else begin
+            // Responses come back on VN2 and are counted in D_EXEC.
+            fsm_q <= D_IDLE;
+          end
+        end
+
+        D_BWB: begin
+          if (mem_req_ready_i) begin
+            fsm_q <= D_MEM_WAIT_WB;
+          end
+        end
+
+        D_MEM_WAIT_WB: begin
+          if (mem_resp_valid_i) begin
+            fsm_q <= D_BFREE;
+          end
+        end
+
+        D_BFREE: begin
+          fsm_q <= D_IDLE;
         end
 
         D_MEM_REQ: begin
@@ -531,7 +735,20 @@ module dir_ctrl
         end
 
         D_EXEC: begin
-          if (act.stall || tbe_needed_but_full) begin
+          if (binv_resp) begin
+            // A recall response. Count it, take its data if it brought any,
+            // and when the last one lands free the way.
+            if (cur_q.msg_type == MSG_WB_DATA) begin
+              binv_data_q    <= cur_q.data;
+              binv_wb_pend_q <= 1'b1;
+            end
+            if (binv_last_resp) begin
+              fsm_q <= (binv_wb_pend_q || (cur_q.msg_type == MSG_WB_DATA))
+                       ? D_BWB : D_BFREE;
+            end else begin
+              fsm_q <= D_IDLE;
+            end
+          end else if (act.stall || tbe_needed_but_full) begin
             // Leave the message at the head of VN0 and retry.
             fsm_q <= D_IDLE;
           end else begin
@@ -585,16 +802,34 @@ module dir_ctrl
     !vn2_q_full)
     else $error("dir_ctrl: bank %0d VN2 input queue filled -- the response network is no longer a sink", BANK_ID);
 
+  // A recall response is the one event the directory handles outside the
+  // protocol table -- see binv_resp -- so the table's verdict on it is not
+  // meaningful and the assertion must not read it. Every OTHER event reaching
+  // D_EXEC is a protocol event and the table must have a cell for it.
   a_no_illegal_event : assert property (@(posedge clk) disable iff (!rst_n)
-    (fsm_q == D_EXEC) |-> !act.illegal)
+    ((fsm_q == D_EXEC) && !binv_resp) |-> !act.illegal)
     else $error("dir_ctrl: bank %0d took event %0d in state %0d, which the table marks impossible", BANK_ID, dir_event, old_meta_q.dir_state);
 
-  // Phase 6 has no capacity eviction; Phase 9 adds back-invalidation. Until
-  // then a set running out of ways is a testbench footprint error, and the
-  // assertion says so rather than letting the directory quietly misbehave.
-  a_free_way_available : assert property (@(posedge clk) disable iff (!rst_n)
-    ((fsm_q == D_LOOK) && !hit) |-> have_free_way)
-    else $error("dir_ctrl: bank %0d set %0d is full and back-invalidation does not exist yet (Phase 9)", BANK_ID, cur_set_q);
+  // A full set is now handled by back-invalidation, but there must always be
+  // SOMETHING to evict: a set in which every way is mid-transaction has no
+  // legal victim and the request behind it can never proceed.
+  a_victim_available : assert property (@(posedge clk) disable iff (!rst_n)
+    ((fsm_q == D_LOOK) && !hit && !have_free_way && !binv_active_here)
+      |-> have_victim)
+    else $error("dir_ctrl: bank %0d set %0d is full and every way has a live transaction, so there is no legal victim", BANK_ID, cur_set_q);
+
+  // The victim must never be a line that is mid-transaction: evicting it would
+  // strand whatever it is waiting for.
+  a_victim_not_busy : assert property (@(posedge clk) disable iff (!rst_n)
+    (fsm_q == D_BINV) |-> victim_ok_mask[binv_way_q])
+    else $error("dir_ctrl: bank %0d chose way %0d as a victim while it had a live TBE", BANK_ID, binv_way_q);
+
+  // Inclusion: a recall must account for every copy, so the expected response
+  // count has to match what the metadata says is out there.
+  a_recall_counts_every_copy : assert property (@(posedge clk) disable iff (!rst_n)
+    ((fsm_q == D_BINV) && (binv_meta_q.dir_state == DIR_S))
+      |-> (binv_expect != '0) || (binv_meta_q.sharers == '0))
+    else $error("dir_ctrl: bank %0d is recalling a shared line but expects no acks", BANK_ID);
 
   a_tbe_alloc_into_free : assert property (@(posedge clk) disable iff (!rst_n)
     tbe_alloc_valid |-> tbe_alloc_ready)
