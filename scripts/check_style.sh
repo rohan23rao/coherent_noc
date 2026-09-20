@@ -30,7 +30,15 @@ report "packed dimension must be [N-1:0], not [N]" "$hits"
 hits=$(grep -rnE '^\s*initial\b|\bforce\b|\brelease\b|#\s*[0-9]' "$RTL_DIR" --include='*.sv' || true)
 report "initial / #delay / force / release are not allowed under rtl/" "$hits"
 
-# 3. Bare always blocks.
+# 3. Every always_ff must take negedge rst_n, or carry an explicit
+#    "no-reset:" justification on the same line. This is the invariant that
+#    Verilator's SYNCASYNCNET is a proxy for; SYNCASYNCNET itself is waived
+#    because `disable iff (!rst_n)` in SVA trips it unconditionally.
+hits=$(grep -rnE 'always_ff\s*@\s*\(\s*posedge' "$RTL_DIR" --include='*.sv' \
+       |  grep -vE 'negedge a?rst_n' | grep -v 'no-reset:' || true)
+report "always_ff must use 'or negedge rst_n' or carry a 'no-reset:' note" "$hits"
+
+# 4. Bare always blocks.
 hits=$(grep -rnE '\balways\s*@' "$RTL_DIR" --include='*.sv' || true)
 report "use always_ff / always_comb, not bare always @" "$hits"
 

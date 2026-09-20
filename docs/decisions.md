@@ -169,3 +169,31 @@ sites that the helpers exist to eliminate.
 for the whole build. It must be deleted at the Phase 12 gate: if the design is
 complete and the waiver is still needed, the parameters it covers are dead and
 should be removed instead. That check is an explicit Phase 12 item, not a hope.
+
+---
+
+## D8. The FIFO refuses a write while full even when a read drains a slot
+
+**Decision.** `wr_ready_o = !full_o`, with no dependence on `rd_ready_i`.
+
+**Why.** Hard constraint 3 forbids a combinational path from `ready` back to
+`valid` within a module. The "optimized" form `wr_ready_o = !full_o || do_rd`
+creates exactly that path: the downstream consumer's `rd_ready_i` would feed
+combinationally into the upstream producer's `wr_ready_o`, and two such FIFOs
+back to back would compose that path across the whole chain. In a NoC where
+every hop contains a buffer, that is how a design ends up with a critical path
+proportional to the number of routers.
+
+**Alternative considered.** *Allow the same-cycle bypass and cut the path with a
+skid buffer at the boundary instead.* Rejected as the default: it moves the
+problem rather than removing it, and it makes the FIFO's timing behaviour
+dependent on how it was instantiated. `skid_buffer` exists for the places that
+genuinely need a cut, and it is explicit about it.
+
+**Cost, and the number that matters later.** One cycle of re-acceptance latency
+on entry to full. Steady-state throughput with both sides active is still one
+beat per cycle, because the FIFO settles at an occupancy of `DEPTH-1` where
+`wr_ready_o` is continuously high. The consequence is that a `VC_DEPTH=4` buffer
+sustains full-duplex traffic at an effective occupancy of 3, not 4, and that is
+the figure that must be compared against the credit round-trip latency in the
+Phase 3 sizing analysis -- not the nominal depth.

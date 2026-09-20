@@ -4,16 +4,25 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 2
+// Current count: 3
 
 // coh_pkg declares the complete parameter set up front, so parameters read only
 // by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
 // by then every parameter must have a consumer, and this waiver should be
 // deletable. If it is not, the parameter is dead and should be removed instead.
-lint_off -rule UNUSEDPARAM -file "*/rtl/pkg/coh_pkg.sv"
+lint_off -rule UNUSEDPARAM -file "*coh_pkg.sv"
 
 // The address-decode helpers each extract one field from a full address, so by
 // construction every one of them leaves the other fields unread. Making this
 // warning go away would mean passing pre-sliced arguments, which is exactly the
 // magic-number-at-the-call-site problem the helpers exist to prevent.
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/pkg/coh_pkg.sv"
+lint_off -rule UNUSEDSIGNAL -file "*coh_pkg.sv"
+
+// SYNCASYNCNET fires on every module that resets flops with `negedge rst_n` and
+// also writes `disable iff (!rst_n)` in an SVA property: the same net is then
+// seen as both an async reset and a synchronous condition. That combination is
+// the standard assertion idiom, not a reset-domain bug. The invariant the rule
+// actually protects -- that every always_ff uses the same async reset, or is
+// explicitly annotated as unreset -- is enforced directly by
+// scripts/check_style.sh check 3, which is stricter than this rule.
+lint_off -rule SYNCASYNCNET

@@ -23,17 +23,23 @@ TOP        ?= system_top
 RTL_SRCS := \
 	$(RTL_DIR)/pkg/coh_pkg.sv \
 	$(RTL_DIR)/lib/reset_sync.sv \
+	$(RTL_DIR)/lib/rr_arbiter.sv \
+	$(RTL_DIR)/lib/credit_counter.sv \
+	$(RTL_DIR)/lib/fifo.sv \
+	$(RTL_DIR)/lib/skid_buffer.sv \
+	$(RTL_DIR)/lib/sram_1rw.sv \
 	$(RTL_DIR)/top/system_top.sv
 
-VERILATOR_LINT_FLAGS := \
+VERILATOR_LINT_FLAGS_BASE := \
 	--lint-only \
 	-Wall \
-	--timing \
-	--top-module $(TOP)
+	--timing
+
+VERILATOR_LINT_FLAGS := $(VERILATOR_LINT_FLAGS_BASE) --top-module $(TOP)
 
 WAIVERS := $(ROOT)/lint/waivers.vlt
 
-.PHONY: all lint lint-rtl lint-style test waves mutate clean help
+.PHONY: all lint lint-rtl lint-style lint-libs test waves mutate clean help
 
 all: lint test
 
@@ -41,7 +47,7 @@ all: lint test
 # Lint: Verilator -Wall with zero warnings, plus the structural checks Verilator
 # does not perform. Both must pass.
 #------------------------------------------------------------------------------
-lint: lint-style lint-rtl
+lint: lint-style lint-rtl lint-libs
 
 lint-rtl:
 	@echo "== verilator --lint-only -Wall =="
@@ -51,6 +57,26 @@ lint-rtl:
 lint-style:
 	@echo "== structural style checks =="
 	@$(SCRIPTS)/check_style.sh $(RTL_DIR)
+
+# Elaborating only from the system top leaves modules that nothing instantiates
+# yet partially unchecked. Lint each library module as its own top as well, so a
+# module is fully linted the day it is written rather than the day it is wired
+# in.
+LIB_MODULES := reset_sync rr_arbiter credit_counter fifo skid_buffer sram_1rw
+
+lint-libs:
+	@echo "== verilator -Wall, each library module as its own top =="
+	@for m in $(LIB_MODULES); do \
+	  printf '  %-16s ' "$$m"; \
+	  $(VERILATOR) $(VERILATOR_LINT_FLAGS_BASE) --top-module $$m \
+	    $(WAIVERS) $(RTL_DIR)/pkg/coh_pkg.sv $(RTL_DIR)/lib/$$m.sv \
+	    > /dev/null 2>$(CURDIR)/.lint_$$m.err || true; \
+	  if [ -s $(CURDIR)/.lint_$$m.err ]; then \
+	    echo "FAIL"; cat $(CURDIR)/.lint_$$m.err; rm -f $(CURDIR)/.lint_*.err; exit 1; \
+	  else \
+	    echo "clean"; rm -f $(CURDIR)/.lint_$$m.err; \
+	  fi; \
+	done
 
 #------------------------------------------------------------------------------
 # Test. `make test` runs everything; `make test TEST=<name>` selects by pytest
