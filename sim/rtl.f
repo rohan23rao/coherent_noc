@@ -12,4 +12,5 @@
 ../rtl/noc/switch_allocator.sv
 ../rtl/noc/crossbar.sv
 ../rtl/noc/router.sv
+../rtl/noc/noc_top.sv
 ../rtl/top/system_top.sv

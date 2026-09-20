@@ -4,7 +4,7 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 4
+// Current count: 5
 
 // coh_pkg declares the complete parameter set up front, so parameters read only
 // by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
@@ -35,3 +35,13 @@ lint_off -rule SYNCASYNCNET
 // review: an output that should have been used is a design error the reader can
 // see, whereas an omitted pin is invisible.
 lint_off -rule PINCONNECTEMPTY
+
+// CMPCONST fires in route_compute at the mesh edges. With MESH_X = MESH_Y = 2
+// a coordinate is one bit wide, so at MY_X = 1 the test `dst_x_i > my_x` is
+// constantly false -- there is no "further east" to route to. The comparison is
+// the correct general expression of dimension-ordered routing and stops folding
+// the moment the mesh is wider than two; rewriting it to suit a 2x2 would make
+// the module wrong for every other size. The property that actually matters --
+// that nothing is ever routed off the edge -- is checked directly by the
+// a_no_*_escape assertions in noc_top rather than inferred from this warning.
+lint_off -rule CMPCONST -file "*route_compute.sv"

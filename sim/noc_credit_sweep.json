@@ -1,0 +1,22 @@
+[
+  {
+    "credit_delay": 1,
+    "accepted": 0.3083941605839416,
+    "mean_latency": 8.376008606777837
+  },
+  {
+    "credit_delay": 4,
+    "accepted": 0.30327597617471874,
+    "mean_latency": 9.088379705400982
+  },
+  {
+    "credit_delay": 8,
+    "accepted": 0.2985342019543974,
+    "mean_latency": 14.352427714129842
+  },
+  {
+    "credit_delay": 16,
+    "accepted": 0.221923828125,
+    "mean_latency": 280.1144114411441
+  }
+]

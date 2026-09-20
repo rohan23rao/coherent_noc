@@ -200,3 +200,210 @@ class RouterHarness:
 
 async def tick_guard(h: RouterHarness):
     await h.tick()
+
+
+# ---------------------------------------------------------------------------
+# Mesh-level harness (Phase 3)
+# ---------------------------------------------------------------------------
+
+NUM_TILES = 4
+MESH_X = 2
+
+
+def tile_xy(tile: int):
+    return tile % MESH_X, tile // MESH_X
+
+
+def hops(src: int, dst: int) -> int:
+    sx, sy = tile_xy(src)
+    dx, dy = tile_xy(dst)
+    return abs(dx - sx) + abs(dy - sy)
+
+
+def dest_uniform(rng, src: int) -> int:
+    """Any tile including the source's own."""
+    return rng.randrange(NUM_TILES)
+
+
+def dest_uniform_no_self(rng, src: int) -> int:
+    dst = rng.randrange(NUM_TILES - 1)
+    return dst if dst < src else dst + 1
+
+
+def dest_tornado(rng, src: int) -> int:
+    """(x + X/2) mod X, same y. In a 2x2 this is the horizontal neighbour."""
+    x, y = tile_xy(src)
+    return ((x + MESH_X // 2) % MESH_X) + y * MESH_X
+
+
+def dest_hotspot(rng, src: int) -> int:
+    """Everyone to tile 3, which is where the memory controller lives."""
+    return 3
+
+
+PATTERNS = {
+    "uniform": dest_uniform_no_self,
+    "tornado": dest_tornado,
+    "hotspot": dest_hotspot,
+}
+
+
+class MeshHarness:
+    """Traffic generator and monitor for all four local ports of noc_top.
+
+    Latency is measured from the cycle a packet is *generated* to the cycle its
+    tail is ejected, so source-queueing delay is included. Measuring from
+    injection instead would hide exactly the queue growth that defines the knee
+    of the load-latency curve.
+    """
+
+    def __init__(self, dut, credit_delay: int = 1):
+        self.dut = dut
+        self.credit_delay = credit_delay
+        self.cycle = 0
+
+        self.credits = [[VC_DEPTH] * VCS_PER_PORT for _ in range(NUM_TILES)]
+        self.vc_busy = [[False] * VCS_PER_PORT for _ in range(NUM_TILES)]
+
+        self.src_q = [deque() for _ in range(NUM_TILES)]   # generated, not yet injected
+        self.in_flight = [None] * NUM_TILES
+        self.credit_q = [deque() for _ in range(NUM_TILES)]
+
+        self.generated = 0
+        self.injected_flits = 0
+        self.ejected = []          # (dst_tile, Flit, cycle)
+        self.pkt_meta = {}         # payload of head -> (src, dst, gen_cycle, n_flits)
+        self.latencies = []        # completed packet latencies
+        self.next_id = 1
+
+    # -- generation --------------------------------------------------------
+    def generate(self, src: int, dst: int, n_flits: int, vnet: int):
+        pid = self.next_id
+        self.next_id += 1
+        base = pid << 12
+        dx, dy = tile_xy(dst)
+        flits = [
+            Flit(
+                head=1 if i == 0 else 0,
+                tail=1 if i == n_flits - 1 else 0,
+                dst_x=dx,
+                dst_y=dy,
+                src_id=src,
+                payload=base + i,
+            )
+            for i in range(n_flits)
+        ]
+        self.src_q[src].append((vnet, flits))
+        self.pkt_meta[base] = (src, dst, self.cycle, n_flits)
+        self.generated += 1
+        return base
+
+    # -- internals ---------------------------------------------------------
+    def _free_vc(self, tile: int, vnet: int):
+        for vc_id in range(VCS_PER_VNET):
+            idx = vc_index(vnet, vc_id)
+            if not self.vc_busy[tile][idx]:
+                return idx
+        return None
+
+    def _sample(self):
+        dut = self.dut
+        valid = u(dut.eject_valid_o)
+        word = u(dut.eject_flit_o)
+        for t in range(NUM_TILES):
+            if valid & (1 << t):
+                flit = unpack_port(word, t)
+                self.ejected.append((t, flit, self.cycle))
+                self.credit_q[t].append(
+                    (self.cycle + self.credit_delay,
+                     vc_index(flit.vnet, flit.vc_id),
+                     flit.tail)
+                )
+                if flit.tail:
+                    # Payloads are base + flit_index with base = packet_id << 12,
+                    # so masking off the low 12 bits recovers the packet.
+                    head_base = (flit.payload >> 12) << 12
+                    meta = self.pkt_meta.get(head_base)
+                    if meta is not None:
+                        _, _, gen_cycle, _ = meta
+                        self.latencies.append(self.cycle - gen_cycle)
+
+        cvalid = u(dut.inject_credit_valid_o)
+        cvc = u(dut.inject_credit_vc_o)
+        ctail = u(dut.inject_credit_tail_o)
+        for t in range(NUM_TILES):
+            if cvalid & (1 << t):
+                vc = (cvc >> (t * VC_SEL_W)) & ((1 << VC_SEL_W) - 1)
+                self.credits[t][vc] += 1
+                assert self.credits[t][vc] <= VC_DEPTH, (
+                    f"tile {t} VC {vc}: credit overflow"
+                )
+                if ctail & (1 << t):
+                    self.vc_busy[t][vc] = False
+
+    def _drive(self):
+        dut = self.dut
+        valid = 0
+        flit_word = 0
+        for t in range(NUM_TILES):
+            if self.in_flight[t] is None and self.src_q[t]:
+                vnet = self.src_q[t][0][0]
+                vc = self._free_vc(t, vnet)
+                if vc is not None:
+                    _, flits = self.src_q[t].popleft()
+                    self.in_flight[t] = {"vc": vc, "flits": deque(flits)}
+                    self.vc_busy[t][vc] = True
+
+            cur = self.in_flight[t]
+            if cur is None:
+                continue
+            vc = cur["vc"]
+            if self.credits[t][vc] == 0:
+                continue
+            flit = cur["flits"][0]
+            flit.vc_id = vc & 1
+            flit.vnet = vc >> 1
+            valid |= 1 << t
+            flit_word |= flit.pack() << (t * FLIT_W)
+            self.credits[t][vc] -= 1
+            cur["flits"].popleft()
+            self.injected_flits += 1
+            if not cur["flits"]:
+                self.in_flight[t] = None
+
+        dut.inject_valid_i.value = valid
+        dut.inject_flit_i.value = flit_word
+
+        cvalid = 0
+        cvc = 0
+        ctail = 0
+        for t in range(NUM_TILES):
+            q = self.credit_q[t]
+            if q and q[0][0] <= self.cycle:
+                _, vc, is_tail = q.popleft()
+                cvalid |= 1 << t
+                cvc |= vc << (t * VC_SEL_W)
+                if is_tail:
+                    ctail |= 1 << t
+        dut.eject_credit_valid_i.value = cvalid
+        dut.eject_credit_vc_i.value = cvc
+        dut.eject_credit_tail_i.value = ctail
+
+    async def tick(self):
+        await step(self.dut)
+        self.cycle += 1
+        self._sample()
+        self._drive()
+
+    def idle(self):
+        d = self.dut
+        d.inject_valid_i.value = 0
+        d.inject_flit_i.value = 0
+        d.eject_credit_valid_i.value = 0
+        d.eject_credit_vc_i.value = 0
+        d.eject_credit_tail_i.value = 0
+
+    def backlog(self) -> int:
+        return sum(len(q) for q in self.src_q) + sum(
+            1 for f in self.in_flight if f is not None
+        )

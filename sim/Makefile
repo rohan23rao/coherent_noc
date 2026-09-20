@@ -34,6 +34,7 @@ RTL_SRCS := \
 	$(RTL_DIR)/noc/switch_allocator.sv \
 	$(RTL_DIR)/noc/crossbar.sv \
 	$(RTL_DIR)/noc/router.sv \
+	$(RTL_DIR)/noc/noc_top.sv \
 	$(RTL_DIR)/top/system_top.sv
 
 VERILATOR_LINT_FLAGS_BASE := \
@@ -69,7 +70,7 @@ lint-style:
 # module is fully linted the day it is written rather than the day it is wired
 # in.
 LIB_MODULES := reset_sync rr_arbiter credit_counter fifo skid_buffer sram_1rw
-NOC_MODULES := route_compute crossbar input_unit vc_allocator switch_allocator router
+NOC_MODULES := route_compute crossbar input_unit vc_allocator switch_allocator router noc_top
 
 # A second, independent SystemVerilog front end. slang's elaboration is
 # stricter than Verilator's in different places, so a warning from either is

@@ -1,0 +1,82 @@
+[
+  {
+    "offered": 0.02,
+    "accepted": 0.020068027210884354,
+    "mean_latency": 8.016949152542374,
+    "completed": 177,
+    "generated": 177,
+    "mean_hops": 1.3389830508474576
+  },
+  {
+    "offered": 0.05,
+    "accepted": 0.05031731640979148,
+    "mean_latency": 7.921171171171171,
+    "completed": 444,
+    "generated": 444,
+    "mean_hops": 1.3018018018018018
+  },
+  {
+    "offered": 0.1,
+    "accepted": 0.10054347826086957,
+    "mean_latency": 8.022522522522523,
+    "completed": 888,
+    "generated": 888,
+    "mean_hops": 1.3175675675675675
+  },
+  {
+    "offered": 0.15,
+    "accepted": 0.15436165379373012,
+    "mean_latency": 8.130242825607064,
+    "completed": 1359,
+    "generated": 1359,
+    "mean_hops": 1.3399558498896247
+  },
+  {
+    "offered": 0.2,
+    "accepted": 0.20126926563916592,
+    "mean_latency": 8.167792792792794,
+    "completed": 1776,
+    "generated": 1776,
+    "mean_hops": 1.320945945945946
+  },
+  {
+    "offered": 0.25,
+    "accepted": 0.24784775713638424,
+    "mean_latency": 8.219835466179159,
+    "completed": 2188,
+    "generated": 2188,
+    "mean_hops": 1.3290676416819014
+  },
+  {
+    "offered": 0.3,
+    "accepted": 0.2967829632985954,
+    "mean_latency": 8.393511450381679,
+    "completed": 2620,
+    "generated": 2620,
+    "mean_hops": 1.3393129770992367
+  },
+  {
+    "offered": 0.4,
+    "accepted": 0.3964463558171118,
+    "mean_latency": 8.727376534399086,
+    "completed": 3503,
+    "generated": 3503,
+    "mean_hops": 1.3311447330859263
+  },
+  {
+    "offered": 0.5,
+    "accepted": 0.49875509280217295,
+    "mean_latency": 10.481052870433402,
+    "completed": 4407,
+    "generated": 4407,
+    "mean_hops": 1.3392330383480826
+  },
+  {
+    "offered": 0.7,
+    "accepted": 0.6043641390205371,
+    "mean_latency": 155.4523770625715,
+    "completed": 6121,
+    "generated": 6121,
+    "mean_hops": 1.3332788760006535
+  }
+]
