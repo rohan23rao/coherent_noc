@@ -973,9 +973,42 @@ It cannot livelock: a forward is accepted within a bounded number of cycles,
 being blocked only by a response, a retirement or an array write, none of which
 a replaying request can sustain.
 
+**And then a third manifestation, from the response path.** With the two above
+fixed, the racing run deadlocked instead of failing an assertion: an MSHR live
+for 3,000 cycles, and the whole machine idle behind it. The hang dump plus a
+ring buffer of the last few hundred messages gave the sequence:
+
+```
+37985 b2 exec GetM in S, sharers {t0,t2,t3}   -> Data+AckCount(2) to t2,
+                                                 Inv to t0 and t3, dir -> M
+38000 t2 got Data                               SM_AD + Data(ack>0) -> SM_A
+38007 t2 got Inv-Ack from t0                    ack_cnt 2 -> 1
+38010 t2 got Inv-Ack from t3                    ack_cnt 1 -> 0, so: M
+38012 b2 sent Fwd-GetM to t2                    ... which t2 then stalled,
+                                                 in SM_AD
+```
+
+t2 had every ack it was waiting for and was still in `SM_AD`. The response path
+writes the array too -- `state_q[vn2_set][vn2_way] <= vn2_state_eff` -- and a
+**load that HIT that line in SM_AD** wrote SM_AD back over the SM_A the Data
+had just written. The table allows that hit, and rightly: a shared copy is
+still readable while an upgrade is outstanding. But with the state stuck at
+SM_AD, the arriving Inv-Acks decremented the count in a state that has no
+completion arc, so the count reached zero and nothing noticed. The MSHR never
+retired, the cache stalled every forward for that line forever, and VN1 behind
+those forwards backed up until two directories were stuck in `S_D` waiting for
+data from a cache that could no longer receive their requests.
+
+The rule is therefore stated over both coherence paths, not one: **S1 does not
+touch a line that the forward path or the response path is acting on this
+cycle.** The forward handler already yields to the response path; S1 now does
+too, and the response path -- being a sink that can never be asked to wait --
+yields to nobody.
+
 **Test that catches it now.**
-`test_stress.py::test_stress_racing_same_line`. Per-line exclusivity hides it
-completely, so none of the checked stress runs would have.
+`test_stress.py::test_stress_racing_same_line`. Per-line exclusivity hides all
+three completely, so none of the checked stress runs would have found any of
+them.
 
 ---
 

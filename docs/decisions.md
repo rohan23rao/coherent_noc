@@ -722,3 +722,130 @@ so a refactor of the state tables breaks it. The runner turns that into a loud
 a silent skip, which is the failure mode that would matter. It also edits `rtl/`
 in place, so it refuses to start if those files have uncommitted changes:
 "restored" has to mean restored.
+
+---
+
+## D22. A packet keeps one virtual channel for its whole path
+
+**Decision.** The VC index a packet uses within its virtual network is a
+function of the sending tile -- `src_vc_id(t) = t[VC_ID_W-1:0]` -- and it does
+not change at any hop. The network interface injects on that channel and waits
+if it is busy; the router's VC allocator offers the input VC's own index as the
+only candidate. An assertion, `a_same_vc`, says a grant never moves a packet
+between channels.
+
+**Alternatives.** (a) Lowest free VC, chosen per hop -- what this was. (b) VC
+as a function of the *destination*. (c) Leave the network unordered and make
+the protocol tolerate reordering.
+
+**Why.** The coherence protocol requires point-to-point ordering on the forward
+network and did not have it (bug B19). The requirement is easy to miss because
+it is about two different message *classes*: the directory sends a cache a
+forward, and later, on processing that cache's Put, a Put-Ack. The forward is
+legal in `MI_A`; after the Put-Ack the cache is in `I`, where the table is
+blank. The cell is blank because a correct directory never sends a forward
+*after* an ack -- a statement about sending order that says nothing about
+arrival order.
+
+(c) was rejected because tolerating it means adding arcs for forwards into `I`,
+and a cache in `I` has no data to answer with: the requester would wait forever
+regardless. There is no correct permissive behaviour to add.
+
+(b) orders correctly too, but funnels every packet bound for a tile onto one
+channel, so it collapses to a single VC per vnet at the final hop. Keying on
+the *source* keeps both channels in use everywhere and still gives the property
+that is actually required, which is ordering per (source, destination) pair --
+nothing in the protocol cares about the order of messages from different
+senders.
+
+**Why it stays deadlock-free.** Each VC index becomes an independent network,
+each XY-routed, and XY routing is deadlock-free with a single buffer class. The
+virtual networks still break the protocol-level dependency cycle; the VC index
+now breaks nothing and orders everything.
+
+**Cost.** Channel utilisation. A packet that finds its channel busy waits,
+where before it could take the other one. Under the stress tier's hot-spot
+traffic the measured effect was a few percent on completion time, and the
+alternative was a protocol that silently loses a transaction roughly once in
+ten thousand requests.
+
+---
+
+## D23. The core pipeline yields to both coherence paths, on the cycle
+
+**Decision.** A request in S1 does not complete -- no hit response, no MSHR
+allocation, no eviction -- if the forward path or the response path is acting
+on the same line and way in that cycle. It replays.
+
+**Alternatives.** (a) Give S1 priority and make the coherence paths retry. (b)
+Order the writes inside the `always_ff` so the coherence path wins, and let S1
+complete against the state it read. (c) Detect the collision and forward the
+new state to S1 combinationally.
+
+**Why.** Three signals write a line's coherence state -- S1, the VN1 handler,
+the VN2 handler -- and each computes its next state combinationally from the
+current one. Two writes at the same edge do not merge; the later one in the
+block wins, and the other transition is silently lost. Bug B20 is that,
+three times over: a store hit losing a Fwd-GetS's downgrade, an eviction
+reading a pre-downgrade state, and a load hit overwriting the SM_A that an
+arriving Data had just installed.
+
+(a) is wrong at the protocol level, not just inconvenient: the response path is
+a sink and must never be asked to wait, and a forward that retries indefinitely
+is the deadlock the virtual networks exist to prevent. (b) is worse than
+losing the transition -- it would let a *store* complete on a line that is
+being given away, which is a coherence violation rather than a lost update.
+(c) is the general answer and the expensive one: a bypass network between three
+writers, each of whose next state depends on the others'.
+
+Replaying is the cheap and correct option because the retry is not a
+degradation. A store that finds its line downgraded to S on the retry issues a
+GetM, which is exactly what a store to a shared line is supposed to do.
+
+**Why the condition is `valid` and not `accepted`.** A forward can sit at the
+input for several cycles while the handler finishes an earlier one, and S1
+touching the line during that window is the same bug with a wider gap. Keying
+on acceptance would also close a combinational loop, since acceptance depends
+on retirement, which depends on S1.
+
+**Cost.** A core request that collides with coherence traffic on its own line
+loses a cycle. That is rare by construction -- the coherence path is busy with
+a given line for a handful of cycles per transaction -- and it cannot livelock:
+a forward is accepted within a bounded number of cycles, being blocked only by
+a response, a retirement or an array write, none of which a replaying request
+can sustain.
+
+---
+
+## D24. The stress tier raises the liveness bounds, and prints the margin
+
+**Decision.** The constrained-random tier builds with `TBE_TO = 20000` and
+`MSHR_TO = 40000` rather than the defaults of 500 and 1000, and every run
+prints the worst age it actually observed against them.
+
+**Alternatives.** (a) Keep the default bounds and inject smaller delays. (b)
+Keep the default bounds and accept that the tier cannot reach the races that
+need long delays. (c) Remove the bounds from the stress tier.
+
+**Why.** The stress tier injects holds of up to 200 cycles on requests, because
+the stale-Put family of races needs a request delayed long enough for a line's
+directory state to move on twice -- hundreds of cycles, not tens. Measured
+under those holds, a transaction legitimately lives around 600-900 cycles. The
+default bounds, sized for a network without injected delay, then fire on
+correct behaviour.
+
+That was established by measurement rather than assumed: the bounds were raised
+and the run repeated, and it completed with a worst MSHR age of 885 and a worst
+TBE age of 687. A bound that fires at 500 against a real worst case of 687 is
+not a deadlock detector, it is a flake.
+
+(a) would have cost three directory arcs -- the whole E-state stale-Put family
+went from uncovered to covered when the holds were lengthened. (c) would give
+up the only mechanism that distinguishes a deadlock from a slow run, and the
+racing configuration found a real deadlock (B20's third manifestation) that
+nothing else would have caught.
+
+**Cost.** The stress tier does not validate the default bounds. Those are
+validated where they belong -- in the directed tiers, which inject no long
+holds and report their own margins: race R12 measures 315 cycles against the
+1000-cycle MSHR bound and 212 against the 500-cycle TBE bound.
