@@ -37,6 +37,7 @@ module mshr_file
   input  logic [CORE_TAG_W-1:0]         alloc_tag_i,
   input  logic [L1_WAY_W-1:0]           alloc_way_i,
   input  logic                          alloc_needs_wb_i,
+  input  logic                          alloc_is_evict_i,
   // The victim's dirty line, parked in the entry's data field until the
   // writeback completes. See l1_cache header note 2.
   input  logic [LINE_W-1:0]             alloc_wb_data_i,
@@ -48,17 +49,18 @@ module mshr_file
   output logic                          lookup_hit_o,
   output logic [MSHR_IDX_W-1:0]         lookup_idx_o,
 
-  // ---- Update ----
-  input  logic                          upd_state_valid_i,
-  input  logic [MSHR_IDX_W-1:0]         upd_state_idx_i,
+  // ---- Update. One per cycle: the controller arbitrates between the VN1 and
+  //      VN2 handlers before driving this port. ----
+  input  logic                          upd_valid_i,
+  input  logic [MSHR_IDX_W-1:0]         upd_idx_i,
+  input  logic                          upd_set_state_i,
   input  l1_state_e                     upd_state_i,
-
-  input  logic                          upd_data_valid_i,
-  input  logic [MSHR_IDX_W-1:0]         upd_data_idx_i,
+  input  logic                          upd_set_data_i,
   input  logic [LINE_W-1:0]             upd_data_i,
-
-  input  logic                          upd_wb_done_i,
-  input  logic [MSHR_IDX_W-1:0]         upd_wb_idx_i,
+  input  logic                          upd_ack_dec_i,
+  input  logic                          upd_ack_add_i,
+  input  logic                          upd_done_i,
+  input  logic signed [ACK_CNT_W-1:0]   upd_ack_val_i,
 
   // ---- Free ----
   input  logic                          free_valid_i,
@@ -117,6 +119,7 @@ module mshr_file
         mshr_q[free_idx_i].valid      <= 1'b0;
         mshr_q[free_idx_i].data_valid <= 1'b0;
         mshr_q[free_idx_i].state      <= L1_I;
+        mshr_q[free_idx_i].done       <= 1'b0;
       end
 
       if (alloc_valid_i && alloc_ready_o) begin
@@ -134,20 +137,34 @@ module mshr_file
         mshr_q[alloc_idx_o].victim_way <= alloc_way_i;
         mshr_q[alloc_idx_o].needs_wb   <= alloc_needs_wb_i;
         mshr_q[alloc_idx_o].wb_addr    <= alloc_wb_addr_i;
+        mshr_q[alloc_idx_o].is_evict   <= alloc_is_evict_i;
+        mshr_q[alloc_idx_o].done       <= 1'b0;
         mshr_q[alloc_idx_o].fwd_pend   <= '0;
       end
 
-      if (upd_state_valid_i) begin
-        mshr_q[upd_state_idx_i].state <= upd_state_i;
-      end
-
-      if (upd_data_valid_i) begin
-        mshr_q[upd_data_idx_i].data       <= upd_data_i;
-        mshr_q[upd_data_idx_i].data_valid <= 1'b1;
-      end
-
-      if (upd_wb_done_i) begin
-        mshr_q[upd_wb_idx_i].needs_wb <= 1'b0;
+      if (upd_valid_i) begin
+        if (upd_set_state_i) begin
+          mshr_q[upd_idx_i].state <= upd_state_i;
+        end
+        if (upd_done_i) begin
+          mshr_q[upd_idx_i].done <= 1'b1;
+        end
+        if (upd_set_data_i) begin
+          mshr_q[upd_idx_i].data       <= upd_data_i;
+          mshr_q[upd_idx_i].data_valid <= 1'b1;
+        end
+        // ack_cnt is SIGNED. A decrement may take it negative when Inv-Acks
+        // overtake the Data that carries the AckCount; the later add credits
+        // it back up. An unsigned counter wraps here and the entry never
+        // completes.
+        if (upd_ack_dec_i && upd_ack_add_i) begin
+          mshr_q[upd_idx_i].ack_cnt <= mshr_q[upd_idx_i].ack_cnt + upd_ack_val_i
+                                       - ACK_CNT_W'(1);
+        end else if (upd_ack_dec_i) begin
+          mshr_q[upd_idx_i].ack_cnt <= mshr_q[upd_idx_i].ack_cnt - ACK_CNT_W'(1);
+        end else if (upd_ack_add_i) begin
+          mshr_q[upd_idx_i].ack_cnt <= mshr_q[upd_idx_i].ack_cnt + upd_ack_val_i;
+        end
       end
     end
   end

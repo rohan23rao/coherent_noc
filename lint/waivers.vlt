@@ -4,7 +4,7 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 5
+// Current count: 7
 
 // coh_pkg declares the complete parameter set up front, so parameters read only
 // by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
@@ -45,3 +45,25 @@ lint_off -rule PINCONNECTEMPTY
 // that nothing is ever routed off the edge -- is checked directly by the
 // a_no_*_escape assertions in noc_top rather than inferred from this warning.
 lint_off -rule CMPCONST -file "*route_compute.sv"
+
+// l1_cache instantiates l1_coh_fsm four times -- for the core request, the
+// victim being evicted, an incoming forward and an incoming response -- and
+// each instance consumes only the subset of l1_action_t that its event class
+// can produce. The same is true of the message struct: a VN1 forward carries
+// no data and a VN2 response carries no requester. Wiring per-instance action
+// subtypes would multiply the type definitions and, worse, split the protocol
+// table across several structs; the table is the thing that has to stay
+// readable in one piece. That the unused bits really are unreachable rather
+// than unimplemented is what test_protocol_l1_table.py checks, cell by cell,
+// which is a stronger statement than this warning makes.
+// Phase 12 review item: re-check that no action bit is unused at EVERY
+// instance, which would mean the action exists in the table and nowhere else.
+lint_off -rule UNUSEDSIGNAL -file "*l1_cache.sv"
+
+// dir_ctrl latches a whole coh_msg_t as the request under service, and the
+// ack_count field of an incoming request is meaningless -- the directory is
+// the one that computes AckCounts, never a consumer of them. Splitting the
+// message into request and response subtypes to avoid the warning would mean
+// two struct definitions, two packetization paths in the NIC, and a conversion
+// at every boundary, to save seven bits of register.
+lint_off -rule UNUSEDSIGNAL -file "*dir_ctrl.sv"

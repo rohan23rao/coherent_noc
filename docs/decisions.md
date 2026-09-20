@@ -371,3 +371,82 @@ fill miss and allocate a second MSHR, so a line evicted and immediately
 re-referenced costs two memory round trips instead of one. The replacement
 policy pays for this by not choosing recently-used ways, so the case should be
 rare; the measured stress runs are where that assumption gets tested.
+
+---
+
+## D13. The directory blocks head-of-line on VN0, and that is safe
+
+**Decision.** `dir_ctrl` processes one request at a time and does not pop the
+VN0 head until that request commits. A request that hits a line in `S_D` is
+left at the head and retried, so everything behind it waits too.
+
+**Why it is safe, which is the part that matters.** This is the single most
+dangerous construct in the design, and it is only safe because of three things
+that have to hold together:
+
+1. **VN0 stalling cannot block VN1 or VN2.** The three virtual networks have
+   physically separate queues all the way through, so a wedged request queue
+   cannot stop a forward or a response.
+2. **Every stall is waiting on a VN2 message that is guaranteed to arrive.** A
+   line is in `S_D` because the directory sent a `Fwd-GetS` to an owner that is
+   obliged to answer with data. VN2 is a true sink, so that answer cannot be
+   blocked by the very queue it will unblock.
+3. **VN2 is serviced with absolute priority at the directory.** The arriving
+   data is processed ahead of the stalled request, so the `S_D` resolves and the
+   head makes progress on its next retry.
+
+Remove any one of the three and this deadlocks. Assertions back all three: the
+TBE liveness bound in `tbe_file` fires if anything waits longer than
+`TBE_TIMEOUT`, and `a_vn2_never_backs_up` fires if the response queue ever fills.
+
+**Alternative considered.** *Per-line stall: skip a blocked request and serve
+the next one whose line is free.* This is what the specification prefers, and
+it is the right answer for throughput. It needs the directory to search its
+input queue rather than read its head, which means a CAM over queued addresses
+against the live TBE set, and it introduces the possibility of reordering two
+requests from the same core to different lines. Rejected for Phase 6 because
+the blanket stall is provably safe with three short arguments, and the per-line
+version needs a fourth about ordering.
+
+**Cost.** One request blocked in `S_D` stalls every request behind it at that
+bank, for the duration of a `Fwd-GetS` round trip. With four cores and four
+banks the measured 10k-request run still completes in 25,667 cycles, so the
+cost is real but not pathological at this scale. At 64 tiles it would be the
+first thing to fix.
+
+---
+
+## D14. An eviction is its own MSHR transaction
+
+**Decision.** When a core request needs to evict a victim, the victim gets its
+own MSHR entry (`is_evict`) carrying `MI_A`/`EI_A`/`SI_A`/`II_A` and its data,
+and the requesting access replays to allocate the now-free way separately.
+
+**Why.** A victim in `MI_A` is not merely "data waiting to be written back" --
+it is a line with a live coherence transaction that can still receive
+`Fwd-GetS` and `Fwd-GetM` for its own address, and must answer them. That means
+it needs an address a forward can CAM-match against, and a state a forward can
+be applied to. Folding it into the requesting line's MSHR would give one entry
+two addresses and two states, and the `MI_A + Fwd-GetM -> II_A` arc would have
+to be applied to the right one.
+
+It also produces a clean division that makes the rest of the controller
+simpler: **the tag array owns the coherence state of every line that is
+resident or becoming resident, transient states included, and an MSHR owns the
+state only of a line that is leaving.** The two sets are disjoint because a
+request to a line with a live MSHR replays, so a line can never be both.
+
+**Alternatives considered.**
+
+- *One MSHR with a victim sub-state.* Rejected above: two addresses in one
+  CAM-matchable entry.
+- *Wait for the Put-Ack before allocating the new line.* Simpler, and wrong in
+  a way that matters: the Put-Ack is bookkeeping on the *old* line and says
+  nothing about the new one. Waiting for it would add a full directory round
+  trip to every conflict miss for no correctness benefit.
+
+**Cost.** A conflict miss consumes two MSHR entries, so the effective miss
+parallelism under conflict pressure is `MSHR_ENTRIES / 2` rather than
+`MSHR_ENTRIES`. That is the honest figure to quote for a conflict-heavy
+footprint, and it is why `test_l1_single_core.py` checks four *non*-conflicting
+misses when it measures peak occupancy.

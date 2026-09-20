@@ -18,4 +18,7 @@
 ../rtl/l1/l1_coh_fsm.sv
 ../rtl/l2/dir_coh_fsm.sv
 ../rtl/l1/l1_cache.sv
+../rtl/l2/l2_bank.sv
+../rtl/l2/tbe_file.sv
+../rtl/l2/dir_ctrl.sv
 ../rtl/top/system_top.sv

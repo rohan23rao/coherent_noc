@@ -300,3 +300,115 @@ into a footprint chosen so that eviction and re-reference overlap. The directed
 tests were deliberately not extended to cover it: the point worth keeping is
 that a window this narrow is found by randomized traffic against a reference
 model, not by cases a designer thinks to write down.
+
+---
+
+## B7. The directory wrote the previous transaction's metadata (Phase 6, RTL)
+
+**Symptom.** Three cores shared a line; a fourth core's store invalidated only
+one of them. The message trace showed the directory sending a single `Inv` with
+`ack=1` when two sharers were recorded:
+
+```
+c1  L12->VN0 GETM a=0x24 s=2 d=0 r=2 ack=0
+c5  D0->VN2  DATA_DIR a=0x24 s=0 d=2 r=2 ack=1     <-- ack=1, should be 2
+c6  D0->VN1  INV a=0x24 s=0 d=0 r=2                <-- only tile 0 invalidated
+```
+
+**Localization.** `ack=1` and one `Inv` are both derived from the same value:
+`old_meta.sharers & ~requester`. So the directory believed there was one
+sharer. Tile 1's earlier GetS had been answered -- the trace shows its Data --
+so the request was processed; only its effect on the sharer vector was missing.
+That narrows it to the metadata write, not the decision logic.
+
+**Root cause.** The metadata write port was driven with `new_meta_q`, a
+*register* loaded at the end of the same `D_EXEC` cycle in which the write is
+issued. At the moment of the write it still held the previous transaction's
+result. Every metadata update was therefore applied one transaction late, so
+tile 1's `add_sharer` was written during some later, unrelated request -- or
+not at all.
+
+The combinational `new_meta` and the registered `new_meta_q` differed by one
+cycle and by one character at the use site, which is exactly the kind of
+difference that reads as correct.
+
+**Fix.** `D_EXEC` writes the combinational `new_meta`; `D_WRDATA`, which runs
+the cycle *after* `D_EXEC`, writes `new_meta_q`. Both are commented with which
+one is correct where, because the two are otherwise indistinguishable by eye.
+
+**Test that catches it now.**
+`test_protocol_msi.py::test_store_invalidates_sharers`, which shares a line
+between two cores before storing from a third and then requires that no sharer
+survives. The 10k randomized run also catches it, via SWMR.
+
+---
+
+## B8. IM_A and SM_A never became M when the ack count reached zero (Phase 6, RTL)
+
+**Symptom.** The store that had just correctly invalidated its sharers never
+completed. Tracing showed the data arriving with `ack=1`, the `Inv-Ack` arriving
+from the sharer, and then nothing.
+
+**Localization.** The MSHR was in `IM_A` with `ack_cnt == 0` and `data_valid`
+set -- everything the transaction was waiting for had arrived. The retirement
+condition required a *stable* state, and `IM_A` is not stable, so the entry sat
+there forever.
+
+**Root cause.** The specification's table says "IM_A on Inv-Ack: `ack--`; if 0
+-> M", and `l1_coh_fsm` implements only the `ack--` half, with a comment saying
+the controller drives the rest. The controller never did. The table is a pure
+(state, event) function and cannot see the ack count, so this promotion is
+genuinely the controller's job -- it was simply missing.
+
+**Fix.** The controller now computes the post-update ack count and promotes
+`IM_A`/`SM_A` to M when it reaches zero, in the same cycle as the update rather
+than at retirement, so the promotion is visible to a forward arriving on the
+next cycle. Doing it here also covers the early-ack race R1 in one place: when
+acks overtook the data, `ack_cnt` is already negative and the arriving AckCount
+credits it straight to zero, so `IM_AD + Data[ack>0]` promotes to M immediately
+without ever resting in `IM_A`.
+
+**Test that catches it now.**
+`test_protocol_msi.py::test_store_invalidates_sharers` (which requires the
+store to complete at all) and `::test_random_with_swmr_checker`.
+
+---
+
+## B9. A request that triggered an eviction was dropped (Phase 6, RTL)
+
+**Symptom.** A load hung after a conflicting store had filled the set:
+
+```
+=== ST 0x80 ===          ... completes, line in M
+=== LD 0x2080 ===        ... completes, line in S
+=== LD 0x4080 ===        forces an eviction
+  L10>VN0 PUTM a=0x4     eviction issued
+  D0>VN1  PUT_ACK a=0x4  eviction completes
+  LD completed: False    ... and the load never went out
+```
+
+The eviction worked perfectly. The request that caused it disappeared:
+`s1_valid_q=0`, replay slot empty, no MSHR, and no GetS ever sent.
+
+**Localization.** The trace makes this one immediate -- a PutM went out and a
+Put-Ack came back, so the eviction path was healthy, while no GetS followed. In
+S1 a request can take exactly one of four exits: respond, allocate, evict, or
+replay. `s1_replay` was written as
+`s1_valid_q && !s1_resp && !s1_evict && !s1_alloc`, so on the cycle it took the
+evict exit it did not also take the replay exit, and `s1_valid_q <= s0_issue`
+cleared it.
+
+**Root cause.** Treating "evict" as if it served the request. It does not:
+issuing a Put frees the way, and the original load or store still has to be
+performed against the now-free way. The eviction is a *side effect* of the
+request, not a disposition of it.
+
+**Fix.** `s1_replay = s1_valid_q && !s1_resp && !s1_alloc`. The rule is now
+"replay unless the request was answered or got its own transaction", which is
+the correct statement and does not enumerate exits.
+
+**Test that catches it now.**
+`test_l1_single_core.py::test_dirty_victim_survives_eviction`, and every later
+test with a footprint that overflows a set -- including the 10k randomized
+multi-core run, where it was originally masked by the run stalling for a
+different reason.

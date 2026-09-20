@@ -371,8 +371,32 @@ package coh_pkg;
     logic [L1_WAY_W-1:0]           victim_way;
     logic                          needs_wb;     // victim was dirty
     logic [LINE_ADDR_W-1:0]        wb_addr;      // victim's line address
+    logic                          is_evict;     // this entry is a Put transaction
+    logic                          done;         // transaction finished, ready to retire
     logic [2:0]                    fwd_pend;     // deferred forward, Phase 6+
   } mshr_e;
+
+  //---------------------------------------------------------------------------
+  // Transaction buffer entry at the directory. One per line that the directory
+  // is waiting on: a line in S_D awaiting the owner's data, an L2 miss awaiting
+  // memory, or (Phase 9) a back-invalidation collecting acks.
+  //
+  // `age` exists so that the liveness bound is an assertion inside the file
+  // that owns the state, rather than a watchdog in the testbench. A TBE that
+  // outlives TBE_TIMEOUT means something it is waiting for is never coming,
+  // which is a deadlock however it is dressed up.
+  //---------------------------------------------------------------------------
+  localparam int unsigned TBE_AGE_W = $clog2(TBE_TIMEOUT + 1) + 1;
+
+  typedef struct packed {
+    logic                        valid;
+    tbe_state_e                  state;
+    logic [LINE_ADDR_W-1:0]      addr;
+    logic [L2_WAY_W-1:0]         way;
+    logic [TILE_ID_W-1:0]        requester;
+    logic signed [ACK_CNT_W-1:0] ack_cnt;
+    logic [TBE_AGE_W-1:0]        age;
+  } tbe_e;
 
   //---------------------------------------------------------------------------
   // Flit. Wormhole with VCs: a control packet is one head+tail flit, a data
