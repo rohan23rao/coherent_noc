@@ -29,7 +29,9 @@ import pytest
 from cocotb.clock import Clock
 
 from models.coherence_checker import SwmrChecker
+from models import hangdump
 from models.coverage import Coverage
+from models.probe import LivenessGauge
 from models.multicore import NUM_TILES, MultiCoreDriver
 from models.net_delay import NetDelay
 from models import raceutil as ru
@@ -42,10 +44,20 @@ NOC = RTL_DIR / "noc"; TILE = RTL_DIR / "tile"; TOP = RTL_DIR / "top"
 
 MEM_LINES = 16384          # must span the 256-line footprint's stride
 MEM_LAT = 8
+# The liveness bounds for this build. The stress tier deliberately injects
+# holds of up to 200 cycles to open the windows the stale-Put races need, so
+# the bounds have to be given the corresponding slack -- and every run prints
+# the worst age it actually observed against them, which is the number that
+# says whether the slack was needed or merely granted.
+TBE_TO = 20000
+MSHR_TO = 40000
 # The gate is 100k per footprint. STRESS_REQUESTS lowers it for a smoke run
 # during development; every run prints the number it actually completed, so a
 # lowered run cannot be mistaken for the gate.
 REQUESTS = int(os.environ.get("STRESS_REQUESTS", 100_000))
+# STRESS_HANG=<cycles> dumps the whole machine the moment any MSHR or TBE
+# has been live that long, instead of waiting for the bound to fire.
+_HANG = int(os.environ.get("STRESS_HANG", 0))
 
 _COV = None                # accumulated across every test in this module
 
@@ -104,20 +116,39 @@ def _reshuffle(delay, rng):
     """Re-randomise the per-virtual-network holds.
 
     Mostly small, occasionally large. The small values keep changing which
-    arbitration order the run happens to take; the occasional large one opens
-    a window wide enough for a forward to overtake a response, which is what
-    makes transient-state arcs reachable without arranging them by hand.
+    arbitration order a run happens to take; the large ones open windows wide
+    enough for a message to be overtaken, which is what makes the transient
+    arcs reachable without arranging each one by hand.
+
+    Requests get the long holds and responses do not, and that asymmetry is
+    deliberate. A stale Put -- the whole E-state family of races -- needs a
+    request delayed long enough for the line's directory state to have moved
+    on twice, which is hundreds of cycles. Delaying a RESPONSE that long
+    instead would push a directory transaction past its liveness bound and
+    fail the run for a reason the test did not intend to create.
     """
-    for vnet in range(4):
+    for src in range(NUM_TILES):
+        if rng.random() < 0.12:
+            delay.set_vn0(src, rng.randrange(60, 200))
+        elif rng.random() < 0.25:
+            delay.set_vn0(src, rng.randrange(8, 40))
+        else:
+            delay.set_vn0(src, rng.randrange(0, 4))
+    # Forwards and responses get medium holds. These widen the window a
+    # directory spends in S_D waiting for an owner's data, which is what a Put
+    # has to land inside to reach the S_D rows of the table at all.
+    for vnet in (1, 2, 3):
         for src in range(NUM_TILES):
             if rng.random() < 0.10:
-                delay.set(vnet, src, rng.randrange(8, 40))
+                delay.set(vnet, src, rng.randrange(8, 120))
             else:
                 delay.set(vnet, src, rng.randrange(0, 4))
 
 
 async def _stress(dut, drv, delay, cov, addrs, target, racing=False,
                   store_prob=0.5, max_cycles=4_000_000):
+    gauge = LivenessGauge(dut, every=8, mshr_bound=MSHR_TO, tbe_bound=TBE_TO)
+    tracer = hangdump.Tracer(dut) if _HANG else None
     drv.racing = racing
     sets = sorted({sc.set_of(a) for a in addrs})
     checker = SwmrChecker(dut, sets)
@@ -134,7 +165,16 @@ async def _stress(dut, drv, delay, cov, addrs, target, racing=False,
         cyc += 1
         drv._collect()
         cov.sample(drv.cycle)
+        gauge.sample()
         checker.check(cyc)
+        if _HANG:
+            tracer.sample(cyc)
+            if cyc % 64 == 0:
+                who = hangdump.stuck(dut, _HANG)
+                if who:
+                    raise AssertionError(
+                        hangdump.dump(dut, cyc, who)
+                        + "\n  recent messages:\n" + tracer.text())
         if drv.mismatches:
             break
         if cyc % 700 == 0:
@@ -155,7 +195,8 @@ async def _stress(dut, drv, delay, cov, addrs, target, racing=False,
     checker.assert_clean()
     assert drv.completed >= target, (
         f"only {drv.completed} of {target} requests completed in {cyc} cycles")
-    return f"{drv.completed} requests in {cyc} cycles; {checker.summary()}"
+    return (f"{drv.completed} requests in {cyc} cycles; {checker.summary()}; "
+            f"{gauge.summary()}")
 
 
 @cocotb.test()
@@ -255,5 +296,6 @@ def test_stress():
         toplevel="system_top",
         test_module="test_stress",
         sources=_sources(),
-        parameters={"MEM_LINES": MEM_LINES, "MEM_LAT": MEM_LAT, "ENABLE_E": 1},
+        parameters={"MEM_LINES": MEM_LINES, "MEM_LAT": MEM_LAT, "ENABLE_E": 1,
+                    "TBE_TO": TBE_TO, "MSHR_TO": MSHR_TO},
     )

@@ -644,6 +644,22 @@ module l1_cache
                            (s1_hit ? (vn1_way == s1_hit_idx)
                                    : (vn1_way == s1_victim));
 
+  // And the same for the response path, which is the third writer of a line's
+  // state. It is a sink, so it is never blocked and S1 must yield to it
+  // instead -- the same way the forward handler already does. The case that
+  // bit: a load HITS a line in SM_AD, which the table allows because a shared
+  // copy is still readable while an upgrade is outstanding, and writes SM_AD
+  // back over the SM_A that the arriving Data+AckCount had just written. The
+  // count then reaches zero in a state that has no completion arc, the MSHR
+  // never retires, and the cache waits forever for acks it has already had.
+  logic s1_vn2_conflict;
+  assign s1_vn2_conflict = vn2_take && vn2_hit && (vn2_set == s1_set) &&
+                           (s1_hit ? (vn2_way == s1_hit_idx)
+                                   : (vn2_way == s1_victim));
+
+  logic s1_coh_conflict;
+  assign s1_coh_conflict = s1_vn1_conflict || s1_vn2_conflict;
+
   // The multi-cycle tail of the same rule: while the handler is still reading
   // the array for a forward it accepted, that line is not a replacement
   // candidate.
@@ -664,14 +680,14 @@ module l1_cache
   assign s1_needs_txn  = s1_act.send_gets || s1_act.send_getm;
   assign s1_is_upgrade = s1_hit && s1_needs_txn;
 
-  assign s1_resp   = s1_valid_q && s1_act.hit && !s1_vn1_conflict;
+  assign s1_resp   = s1_valid_q && s1_act.hit && !s1_coh_conflict;
   assign s1_evict  = s1_valid_q && s1_needs_txn && !s1_is_upgrade &&
                      s1_victim_ok && needs_evict && !victim_is_vn1_line &&
-                     !s1_vn1_conflict &&
+                     !s1_coh_conflict &&
                      !victim_busy && mshr_alloc_ready && vn0_q_wr_ready;
   assign s1_alloc  = s1_valid_q && s1_needs_txn && !s1_evict &&
                      (s1_is_upgrade || (s1_victim_ok && !needs_evict)) &&
-                     !s1_vn1_conflict &&
+                     !s1_coh_conflict &&
                      !mshr_addr_busy && mshr_alloc_ready && vn0_q_wr_ready;
   // A request that triggered an eviction must still REPLAY: issuing the Put
   // only frees the way, it does not serve the request. Excluding s1_evict here

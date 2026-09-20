@@ -841,3 +841,208 @@ reads is an invitation for somebody to use it.
 rather than assumed: under R12's deliberately adversarial hold the worst
 observed MSHR age is 315 cycles against the 1000-cycle bound and the worst TBE
 age 212 against 500.
+
+---
+
+## B19. The network could reorder two messages between one pair of tiles (Phase 11, RTL)
+
+**Symptom.** The first constrained-random run over a 16-line footprint died on
+an L1 assertion:
+
+```
+l1_cache.sv: tile 0 took VN1 event 5 in state 0, which the table marks
+impossible -- if this is a forward into II_A it is race R8 and the bug is at
+the directory
+```
+
+Event 5 is Inv and state 0 is I: a cache was shown an invalidation for a line
+it did not have.
+
+**How it was localized.** A cycle-level log of every VN1 delivery, every VN0
+send and every directory decision, written to a file with line buffering so it
+would survive the simulator's `$stop`. The window around the failure reads:
+
+```
+1418  t2 -> VN0   PutM(0xa)          tile 2 evicts, enters MI_A
+1431  bank2 -> VN1 Fwd-GetS(0xa) dst2
+1436  bank2 -> VN1 Put-Ack(0xa)  dst2
+1439  VN1 -> t2   Fwd-GetS(0xa)  state=MI_A    presented, not accepted
+1444  VN1 -> t2   Put-Ack(0xa)   state=MI_A    accepted: MI_A -> I
+1445  VN1 -> t2   Fwd-GetS(0xa)  state=I       illegal
+```
+
+One sender, one receiver, one virtual network, two messages -- and the second
+one was delivered first.
+
+**Root cause.** The coherence protocol requires point-to-point ordering on the
+forward network, and the network did not provide it. The requirement is not
+obvious and is worth stating: the directory sends a cache a forward, and later,
+on processing that cache's Put, a Put-Ack. The forward is legal in `MI_A`;
+after the Put-Ack the cache is in `I`, where it has neither data to answer with
+nor a transaction to answer for. The cell is blank precisely because a correct
+directory never sends a forward after the ack -- which is true of the *sending*
+order and says nothing about the *arrival* order.
+
+Two places broke the order. The network interface chose the lowest free virtual
+channel within a vnet for each new packet, so two messages from one sender
+could travel on different channels; and the router's VC allocator chose the
+lowest free output VC at each hop, so a packet could change channel mid-flight
+and overtake one that was stalled. The ejection path then offered whichever
+channel's slot was full, by index.
+
+**Fix.** A packet now keeps one virtual channel for its whole path, and that
+channel is a function of the sending tile:
+
+```systemverilog
+function automatic logic [VC_ID_W-1:0] src_vc_id(input logic [TILE_ID_W-1:0] t);
+  return t[VC_ID_W-1:0];
+endfunction
+```
+
+The network interface injects on `src_vc_id(TILE_ID)` and waits if it is busy;
+the VC allocator's candidate is the input VC's own index rather than the lowest
+free one. Each VC index is then an independent, XY-routed subnetwork -- still
+deadlock-free on its own, and FIFO between any pair of tiles that share it.
+A new assertion, `a_same_vc`, says a grant never moves a packet between
+channels, which is the property the protocol depends on.
+
+The cost is channel utilisation: a blocked packet now waits for one specific
+channel rather than any free one in its vnet. That is the trade, and decision
+D22 argues it.
+
+**Test that catches it now.** `test_stress.py::test_stress_16_lines`, within a
+few thousand requests. No directed test would have found it: it needs a
+forward and a Put-Ack in flight to the same cache at the same moment, which is
+a coincidence, not an interleaving anybody would think to arrange.
+
+---
+
+## B20. Two pipeline stages wrote one line's state in the same cycle (Phase 11, RTL)
+
+**Symptom.** With the ordering fixed, the racing stress run -- several cores
+with operations in flight on one line at once -- died on the same assertion
+with a different pair: `Inv` presented to a cache in `MI_A`, which the table
+also leaves blank.
+
+**How it was localized.** The trace showed the directory doing exactly the
+right thing:
+
+```
+1984  bank1 EXEC  GetS in state E, owner=t0   -> Fwd-GetS to t0, dir -> S_D,
+                                                 sharers = {t0, t2}
+1994  VN1 -> t0   Fwd-GetS   state=M           accepted; M + Fwd-GetS -> S
+2020  bank1 EXEC  Data in state S_D            -> S; t0's writeback arrived,
+                                                 so t0 did answer the forward
+2022  t0 -> VN0   PutM(0x1)                    ... and yet t0 evicted from M
+2028  bank1 EXEC  GetM in state S              -> Inv to t0, still a sharer
+2039  VN1 -> t0   Inv        state=MI_A        illegal
+```
+
+Line 2020 and line 2022 cannot both be true of a correct cache: the writeback
+proves t0 handled the forward and moved to S, and the PutM proves its array
+still said M. A per-cycle dump of `state_q` for that set settled it -- the
+forward was accepted at cycle 619 of the racing run with `next_state = S`, and
+the array still read M on the following cycle.
+
+**Root cause.** The VN1 handler and the S1 core pipeline both write a line's
+coherence state, both compute their next state combinationally from the current
+one, and both write at the same clock edge. S1's write comes later in the
+`always_ff`, so S1 wins. A store hit and a Fwd-GetS accepted for the same line
+in one cycle therefore leave the cache having *sent the data away* while its
+array still says M. The eviction path has the same collision from the other
+side: it reads the victim's pre-update state and sends a Put for a state the
+line no longer has.
+
+`array_free` looked like it covered this -- it stops a *new* request being
+issued into S1 when a forward needs the array -- but a request already in S1
+completes regardless.
+
+**Fix.** One rule, stated once: while a forward for a line is at the VN1 input,
+S1 does not touch that line. The request replays, and that is the right outcome
+rather than a convenience -- a store must not complete on a line that is being
+given away, and on the retry it finds the line in S and issues the GetM a store
+to a shared line is supposed to issue.
+
+The condition is `vn1_valid_i`, not `vn1_take`: a forward can sit at the input
+for several cycles while the handler finishes an earlier one, and S1 touching
+the line during that window is the same bug with a wider gap. It also has to be
+`valid` for a second reason -- `vn1_take` depends on retirement, which depends
+on S1, so using it closes a combinational loop.
+
+It cannot livelock: a forward is accepted within a bounded number of cycles,
+being blocked only by a response, a retirement or an array write, none of which
+a replaying request can sustain.
+
+**Test that catches it now.**
+`test_stress.py::test_stress_racing_same_line`. Per-line exclusivity hides it
+completely, so none of the checked stress runs would have.
+
+---
+
+## B21. A clean PutE never restored the L2's "my copy is current" flag (Phase 11, RTL)
+
+**Symptom.** A single lost store, on the fourth stress configuration:
+
+```
+tile 3 tag 2: got 0x60f97dad, golden says 0x60f97d69 [ST 0x10028 be=0xc]
+```
+
+The upper half of the word -- the half this byte-enabled store wrote -- was
+right. The lower half, which the store merged with, was a value from before
+somebody else's store.
+
+**How it was localized.** The mismatching word was traced back through the
+directory: the line was read from memory as zero, and the golden model said it
+should hold a value written 1,500 cycles earlier. A trace of every memory
+access, every L2 write and every state change for that one line gave the whole
+life of the line:
+
+```
+1448  t0 -> VN0  PutM(0xa00) carrying 0xa723c9f6
+1459  L2WR set0 way0  w=0xa723c9f6           the L2 takes the data
+1555  bank0 EXEC GetS in state I  -> DataE    data_valid cleared: t3 may write
+1575  t3 -> VN0  PutE(0xa00)                  t3 did NOT write
+1663  t2 -> VN0  PutE(0xa00)                  nor did t2
+1835  bank0 D_BINV  binv_addr=0xa00  wbpend=0  binv_data=0xa723c9f6
+                                              the way is freed, nothing is
+                                              written back
+2896  MEMRD 0xa00 -> 0                        the store is gone
+```
+
+The data was in the directory's writeback register at the moment it decided
+not to write back.
+
+**Root cause.** `data_valid` says whether the L2's copy of a line is the
+current one. It is cleared when the directory hands a line out exclusively,
+because the cache may modify it silently -- that much was right. Nothing ever
+set it again on the path back. A `PutE` is a cache saying "I had this line
+exclusive and I never wrote to it", so the L2's copy is current again, but the
+PutE arc only acknowledged and cleared the owner. The flag stayed false for
+the rest of the line's life in the L2.
+
+Everything kept working, because every *read* path serves the L2 copy without
+consulting the flag. Only the back-invalidation consults it, and only to decide
+whether to write back -- so the line was dropped and every store that had been
+written into the L2 since went with it.
+
+**Fix.** One line in the metadata update: a PutE from the recorded owner sets
+`data_valid` again. And, more useful than the fix, the invariant it violated,
+asserted where the metadata is written rather than where it is read:
+
+```systemverilog
+// A line the directory records as I or S is one no cache can be holding
+// dirty, so the L2's copy is the only current one and the flag must say so.
+a_l2_copy_current : assert property (@(posedge clk) disable iff (!rst_n)
+  (l2_wr_meta_en && l2_wr_meta.valid &&
+   ((l2_wr_meta.dir_state == DIR_I) || (l2_wr_meta.dir_state == DIR_S)))
+    |-> l2_wr_meta.data_valid)
+```
+
+E, M and S_D are the states where a cache may hold something newer, and there
+the flag is legitimately clear.
+
+**Test that catches it now.**
+`test_stress.py::test_stress_l2_capacity_pressure` -- a footprint with more
+lines per L2 set than the L2 has ways, which is the only configuration that
+back-invalidates continuously. The assertion above catches it thousands of
+cycles earlier than the value check does, and names the set and way.

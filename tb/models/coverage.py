@@ -118,6 +118,35 @@ _AN_OWNER_IN_M_SENDS_PUTM = (
     "no producer.")
 
 
+# Occupancy bins that the structure cannot reach, same rule as above.
+_VC_HOLDS_ONE_PACKET = (
+    "A virtual channel is allocated to one packet at a time and is not "
+    "released until its tail's credit returns, so a VC buffer never holds "
+    "flits of two packets. The longest packet is a data message: one head plus "
+    "LINE_W/FLIT_PAYLOAD_W = 2 body flits. Three is therefore the deepest a VC "
+    "buffer can get. The fourth slot exists so that a credit round trip does "
+    "not stall a channel that is otherwise full, not to be occupied -- see "
+    "docs/decisions.md on the credit depth rule.")
+
+DEFENSIVE_BINS = {
+    ("vc_occ", VC_DEPTH): _VC_HOLDS_ONE_PACKET,
+}
+
+
+_OWNER_ONLY_IN_E_OR_M = (
+    "The owner/non-owner split on a Put is computed as\n"
+    "    is_owner = ((dir_state == DIR_E) || (dir_state == DIR_M)) &&\n"
+    "               (owner == requester)\n"
+    "so the owner variant of a Put event cannot be generated in any other "
+    "state -- S_D included, where the owner field was cleared on the way in "
+    "and means nothing. The cells exist because the table in the primer has "
+    "them; this implementation forecloses them one level earlier, in the event "
+    "decode. Note that this is also what stops a stale Put from tile 0 being "
+    "misread as the owner's: with a two-bit owner field and four tiles there "
+    "is no spare encoding for 'none', and `cleared` is indistinguishable from "
+    "`tile 0` -- the state test is what makes that harmless.")
+
+
 DEFENSIVE = {
     # ---- the cache ---------------------------------------------------------
     ("l1", L1_IM_AD, EV_INV): _INV_NOT_A_SHARER,
@@ -150,6 +179,9 @@ DEFENSIVE = {
     ("dir", DIR_M, DEV_PUTS_NOT_LAST): _EMPTY_VECTOR_IS_ALWAYS_LAST,
 
     ("dir", DIR_M, DEV_PUTE_OWNER): _AN_OWNER_IN_M_SENDS_PUTM,
+
+    ("dir", DIR_S_D, DEV_PUTM_OWNER): _OWNER_ONLY_IN_E_OR_M,
+    ("dir", DIR_S_D, DEV_PUTE_OWNER): _OWNER_ONLY_IN_E_OR_M,
 }
 
 
@@ -236,7 +268,10 @@ class Coverage:
         # R9 is counted during sampling, from the recall message type.
         self.race["R10"] += any_dir(DIR_M, DEV_GETM)    # the line ping-ponged
         self.race["R11"] += any_dir(DIR_E, DEV_PUTM_OWNER)
-        self.race["R12"] += self.vc_occ.get(VC_DEPTH, 0)  # a VC buffer filled
+        # A VC buffer holding a whole data packet: the channel is genuinely
+        # backed up, which is the condition R12 is about. VC_DEPTH itself is
+        # unreachable -- see DEFENSIVE_BINS.
+        self.race["R12"] += self.vc_occ.get(VC_DEPTH - 1, 0)
 
     # -- reporting ----------------------------------------------------------
     def report(self) -> tuple[str, list]:
@@ -268,18 +303,25 @@ class Coverage:
         group("l1", "l1_arc", _legal_l1(), self.l1_hits, _fmt_l1)
         group("dir", "dir_arc", _legal_dir(), self.dir_hits, _fmt_dir)
 
-        for name, legal, hits, fmt in (
-            ("mshr_occ", set(range(MSHR_ENTRIES + 1)), self.mshr_occ, str),
-            ("vc_occ", set(range(VC_DEPTH + 1)), self.vc_occ, str),
-            ("sharers", set(range(NUM_TILES + 1)), self.sharers, str),
+        for name, legal, hits in (
+            ("mshr_occ", set(range(MSHR_ENTRIES + 1)), self.mshr_occ),
+            ("vc_occ", set(range(VC_DEPTH + 1)), self.vc_occ),
+            ("sharers", set(range(NUM_TILES + 1)), self.sharers),
         ):
             covered = {b for b in legal if hits.get(b)}
             missing = sorted(legal - covered)
+            defensive = [b for b in missing if (name, b) in DEFENSIVE_BINS]
             lines.append(f"{name:<10} {len(covered):>4}/{len(legal):<4} covered"
-                         f"   {dict(sorted(hits.items()))}")
+                         + (f", {len(defensive)} uncovered by construction"
+                            if defensive else "")
+                         + f"   {dict(sorted(hits.items()))}")
             for b in missing:
-                lines.append(f"             UNCOVERED  bin {fmt(b)}")
-                open_items.append((name, str(b)))
+                if b in defensive:
+                    lines.append(f"             by construction: bin {b}")
+                    lines.append(f"               {DEFENSIVE_BINS[(name, b)]}")
+                else:
+                    lines.append(f"             UNCOVERED  bin {b}")
+                    open_items.append((name, str(b)))
 
         races = [f"R{i}" for i in range(1, 13)]
         missing = [r for r in races if not self.race.get(r)]
