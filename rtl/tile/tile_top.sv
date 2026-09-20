@@ -58,6 +58,7 @@ module tile_top
   input  logic [7:0]                hold_vn0_i,
   input  logic [7:0]                hold_vn1_i,
   input  logic [7:0]                hold_vn2_i,
+  input  logic [7:0]                hold_vn2_dir_i,
 
   // Debug.
   input  logic [L1_IDX_W-1:0]       dbg_set_i,
@@ -143,8 +144,12 @@ module tile_top
     .in_valid_i (l1_vn2_rv), .in_ready_o (l1_vn2_rr), .in_msg_i (l1_vn2_rm),
     .out_valid_o (l1_vn2_v), .out_ready_i (l1_vn2_r), .out_msg_o (l1_vn2_m)
   );
+  // The directory's responses get their own hold, separate from the cache's.
+  // Both are VN2, but a race that needs Data+AckCount to arrive AFTER the
+  // Inv-Acks it counts (R1) has to delay the directory without delaying the
+  // sharers, and one control for the pair cannot express that.
   msg_hold u_hold_vn2_dir (
-    .clk (clk), .rst_n (rst_n), .hold_i (8'd0),
+    .clk (clk), .rst_n (rst_n), .hold_i (hold_vn2_dir_i),
     .in_valid_i (d_vn2_rv), .in_ready_o (d_vn2_rr), .in_msg_i (d_vn2_rm),
     .out_valid_o (d_vn2_v), .out_ready_i (d_vn2_r), .out_msg_o (d_vn2_m)
   );

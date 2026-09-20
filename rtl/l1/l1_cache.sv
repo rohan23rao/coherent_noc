@@ -350,9 +350,14 @@ module l1_cache
     for (int unsigned w = 0; w < L1_WAYS; w++) begin
       if (vn1_hit_way[w]) vn1_way = L1_WAY_W'(w);
     end
+    // ONLY eviction entries. A line with an ordinary miss outstanding also has
+    // a matching MSHR, but its coherence state lives in the array, not in the
+    // entry -- matching those here reads an unused state field and reports I
+    // for a line in IS_D or SM_AD. See bug B16.
     vn1_match = '0;
     for (int unsigned i = 0; i < MSHR_ENTRIES; i++) begin
-      vn1_match[i] = mshr[i].valid && (mshr[i].addr == vn1_msg_i.addr);
+      vn1_match[i] = mshr[i].valid && mshr[i].is_evict &&
+                     (mshr[i].addr == vn1_msg_i.addr);
     end
     vn1_idx = '0;
     for (int unsigned i = MSHR_ENTRIES; i > 0; i--) begin
@@ -362,9 +367,11 @@ module l1_cache
 
   assign vn1_in_array = |vn1_hit_way;
   // Only an EVICTION keeps its coherence state in the MSHR; every other line's
-  // state, transient included, lives in the array. The two are disjoint: a
-  // request to a line with a live MSHR replays, so a line can never be both
-  // resident and being evicted.
+  // state, transient included, lives in the array. The two are disjoint
+  // because the victim way is invalidated when the eviction is allocated, so a
+  // line is either resident (array) or being evicted (MSHR), never both -- and
+  // `vn1_match` is restricted to eviction entries so that a line that is
+  // resident *and* has a fetch outstanding is read from the array.
   assign vn1_in_mshr = |vn1_match;
   assign vn1_state = vn1_in_mshr ? mshr[vn1_idx].state
                    : vn1_in_array ? state_q[vn1_set][vn1_way]

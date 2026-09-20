@@ -56,7 +56,8 @@ module coh_direct_top
   // This is what lets a directed race test force an exact interleaving.
   input  logic [NUM_TILES-1:0][7:0]                delay_vn0_i,
   input  logic [NUM_TILES-1:0][7:0]                delay_vn1_i,
-  input  logic [NUM_TILES-1:0][7:0]                delay_vn2_i
+  input  logic [NUM_TILES-1:0][7:0]                delay_vn2_i,
+  input  logic [NUM_TILES-1:0][7:0]                delay_vn2_dir_i
 );
 
   // L1 ports. The *_raw nets come straight out of the modules; the undecorated
@@ -83,6 +84,8 @@ module coh_direct_top
   coh_msg_t [NUM_TILES-1:0] d_vn1_raw_msg;
   logic     [NUM_TILES-1:0] d_vn1_valid, d_vn1_ready;
   coh_msg_t [NUM_TILES-1:0] d_vn1_msg;
+  logic     [NUM_TILES-1:0] d_vn2o_raw_valid, d_vn2o_raw_ready;
+  coh_msg_t [NUM_TILES-1:0] d_vn2o_raw_msg;
   logic     [NUM_TILES-1:0] d_vn2o_valid, d_vn2o_ready;
   coh_msg_t [NUM_TILES-1:0] d_vn2o_msg;
 
@@ -125,8 +128,8 @@ module coh_direct_top
       .vn2_msg_i   (d_vn2i_msg[t]),
       .vn1_valid_o (d_vn1_raw_valid[t]), .vn1_ready_i (d_vn1_raw_ready[t]),
       .vn1_msg_o   (d_vn1_raw_msg[t]),
-      .vn2_valid_o (d_vn2o_valid[t]), .vn2_ready_i (d_vn2o_ready[t]),
-      .vn2_msg_o   (d_vn2o_msg[t]),
+      .vn2_valid_o (d_vn2o_raw_valid[t]), .vn2_ready_i (d_vn2o_raw_ready[t]),
+      .vn2_msg_o   (d_vn2o_raw_msg[t]),
       .mem_req_valid_o (mem_req_valid), .mem_req_ready_i (mem_req_ready),
       .mem_req_addr_o (mem_req_addr), .mem_req_we_o (mem_req_we),
       .mem_req_wdata_o (mem_req_wdata),
@@ -157,6 +160,17 @@ module coh_direct_top
       .in_msg_i (l1_vn2o_raw_msg[t]),
       .out_valid_o (l1_vn2o_valid[t]), .out_ready_i (l1_vn2o_ready[t]),
       .out_msg_o (l1_vn2o_msg[t])
+    );
+
+    // The directory's responses are delayed separately from the cache's: R1
+    // needs Data+AckCount to arrive after the Inv-Acks it counts, and one
+    // control for both ends of VN2 cannot express that.
+    msg_delay u_delay_vn2_dir (
+      .clk (clk), .rst_n (rst_n), .delay_i (delay_vn2_dir_i[t]),
+      .in_valid_i (d_vn2o_raw_valid[t]), .in_ready_o (d_vn2o_raw_ready[t]),
+      .in_msg_i (d_vn2o_raw_msg[t]),
+      .out_valid_o (d_vn2o_valid[t]), .out_ready_i (d_vn2o_ready[t]),
+      .out_msg_o (d_vn2o_msg[t])
     );
 
     mem_model #(.MEM_LINES (MEM_LINES), .LATENCY (MEM_LATENCY_P)) u_mem (

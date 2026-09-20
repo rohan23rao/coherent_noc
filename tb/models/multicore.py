@@ -15,6 +15,9 @@ the network-delay hook and know what the answer must be.
 
 Concurrency across *different* lines is unrestricted, so all four cores are
 active and the protocol sees real overlap.
+
+The race tests reach past `plan()` and issue same-line operations directly,
+with `expected` set to None so no per-response check is made; see `_collect`.
 """
 
 import random
@@ -74,7 +77,14 @@ class MultiCoreDriver:
                 self.busy_lines.discard(ln)
                 self.free_tags[t].add(tag)
                 self.completed += 1
-                if got != want:
+                # `want is None` means the testbench deliberately declined to
+                # predict this response: the directed race tests issue two
+                # same-line operations at once, where the coherence order is
+                # the thing under test and guessing it from outside would be
+                # exactly the kind of guess that makes a scoreboard start
+                # accepting wrong answers. Those tests check the outcome
+                # afterwards, from a quiesced machine, instead.
+                if want is not None and got != want:
                     self.mismatches.append(
                         f"tile {t} tag {tag}: got {got:#x}, golden says {want:#x} [{where}]"
                     )

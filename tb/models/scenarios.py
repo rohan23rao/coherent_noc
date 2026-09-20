@@ -44,7 +44,8 @@ def state_of(dut, tile: int, addr: int) -> int:
     return I
 
 
-async def do_op(drv, tile, op, addr, wdata=0, be=0xF, timeout=20000):
+async def do_op(drv, tile, op, addr, wdata=0, be=0xF, timeout=20000,
+                probe=None):
     dut = drv.dut
     ln = line_addr(addr)
     tag = min(drv.free_tags[tile])
@@ -60,6 +61,8 @@ async def do_op(drv, tile, op, addr, wdata=0, be=0xF, timeout=20000):
         await step(dut)
         drv.cycle += 1
         drv._collect()
+        if probe is not None:
+            probe.sample(drv.cycle)
         if tag not in drv.pending[tile] and drv.offer[tile] is None:
             drv.idle()
             drv.assert_clean()

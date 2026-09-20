@@ -669,3 +669,79 @@ its type alone" is written down in one place -- see decision D18.
 specifically a *shared* victim whose home bank is co-located with one of its
 sharers; a victim in M never exercises the path, because that reply is WB-Data,
 which was already classified correctly.
+
+---
+
+## B16. A forward read its state from the wrong place when a miss was outstanding (Phase 10, RTL)
+
+**Symptom.** The very first run of the R2 test -- two sharers store to one line,
+the loser takes an Inv while upgrading -- killed the simulation:
+
+```
+[1220000] %Error: l1_cache.sv:1026: Assertion failed in
+  system_top.gen_tile[0].u_tile.u_l1.a_vn1_event_legal:
+  l1_cache: tile 0 took VN1 event 5 in state 0, which the table marks
+  impossible -- if this is a forward into II_A it is race R8 and the bug is
+  at the directory
+```
+
+Event 5 is Inv and state 0 is I: the cache claimed to have been shown an Inv
+for a line it did not hold.
+
+**How it was localized.** The arc probe gave the whole interleaving for free,
+and it was the *expected* one -- dir I+GetS, tile 0 IS_D+DataE, dir E+GetS,
+tile 0 E+Fwd-GetS, dir S_D+Data, dir S+GetM, tile 1 SM_AD+Data. Nothing was out
+of order. Meanwhile a per-cycle dump of the debug bus showed tile 0 sitting in
+**SM_AD** for that line right up to the cycle the assertion fired. So the state
+the controller reported and the state the array held disagreed, which narrows
+it to the three lines that choose between them. Dumping the VN1 message and the
+two selectors confirmed it: correct address, correct set and tag, and
+`vn1_in_array = 1` *and* `vn1_in_mshr = 1` at once.
+
+**Root cause.** The coherence state of a line being forwarded to lives in one
+of two places. For a line being **evicted** it lives in the MSHR, because the
+array entry has already been invalidated. For everything else, transients
+included, it lives in the array. The selector preferred the MSHR:
+
+```systemverilog
+vn1_match[i] = mshr[i].valid && (mshr[i].addr == vn1_msg_i.addr);
+...
+assign vn1_state = vn1_in_mshr ? mshr[vn1_idx].state : ...
+```
+
+but the match was on address alone, so it also hit the **fetch** MSHR that any
+outstanding miss has for exactly that address. A fetch entry never writes its
+`state` field -- the array is authoritative -- so it reads as I, and every
+forward arriving at a cache with a miss outstanding on the same line was
+classified against state I. The comment above the code asserted the two were
+disjoint and gave a reason ("a request to a line with a live MSHR replays");
+that reason is about *resident versus being evicted* and does not cover
+*resident with a fetch in flight*, which is the ordinary case for every
+transient state.
+
+It also corrupted the write side. `vn1_in_mshr` gates the MSHR update at the end
+of a forward, so a forward handled in SM_AD would have written the next state
+into the fetch entry's unused state field instead of the array.
+
+Why nothing caught it earlier: the constrained-random driver enforces one
+outstanding operation per line, so no forward ever reached a cache that had a
+miss outstanding on that same line. Every transient-state forward arc in the
+protocol -- the entire left half of the race catalogue -- was unreachable from
+the random tests by construction. This is the bug that justifies the directed
+race tier existing at all.
+
+**Fix.** Restrict the match to eviction entries, which is what the selector
+meant all along:
+
+```systemverilog
+vn1_match[i] = mshr[i].valid && mshr[i].is_evict &&
+               (mshr[i].addr == vn1_msg_i.addr);
+```
+
+Both uses -- reading the state and writing the next state -- are then correct
+for the same reason, and the disjointness argument in the comment becomes true
+as written.
+
+**Test that catches it now.** `test_races.py::test_r2_upgrade_loses_the_race`,
+and R3, R4, R6 and R8 would all catch it too: any race whose arc is a forward
+into a transient state.

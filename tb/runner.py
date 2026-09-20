@@ -96,6 +96,10 @@ def run(
         build_dir=str(_build_dir(toplevel, parameters)),
         always=True,
     )
+    # COCOTB_CASE selects one coroutine out of a module. `make test TEST=`
+    # filters at pytest granularity, which is a whole module; this is for
+    # debugging a single named case without touching the file.
+    testcase = os.environ.get("COCOTB_CASE") or None
     runner.test(
         hdl_toplevel=toplevel,
         test_module=test_module,
@@ -103,4 +107,5 @@ def run(
         build_dir=str(_build_dir(toplevel, parameters)),
         seed=seed,
         waves=waves,
+        testcase=testcase,
     )

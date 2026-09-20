@@ -44,6 +44,7 @@ module system_top
   input  logic [NUM_TILES-1:0][7:0]                hold_vn0_i,
   input  logic [NUM_TILES-1:0][7:0]                hold_vn1_i,
   input  logic [NUM_TILES-1:0][7:0]                hold_vn2_i,
+  input  logic [NUM_TILES-1:0][7:0]                hold_vn2_dir_i,
 
   input  logic [L1_IDX_W-1:0]                      dbg_set_i,
   output logic [NUM_TILES-1:0][L1_WAYS-1:0][3:0]   dbg_state_o,
@@ -111,6 +112,7 @@ module system_top
       .hold_vn0_i (hold_vn0_i[t]),
       .hold_vn1_i (hold_vn1_i[t]),
       .hold_vn2_i (hold_vn2_i[t]),
+      .hold_vn2_dir_i (hold_vn2_dir_i[t]),
       .dbg_set_i (dbg_set_i),
       .dbg_state_o (dbg_state_o[t]),
       .dbg_tag_o (dbg_tag_o[t]),
