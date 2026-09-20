@@ -745,3 +745,99 @@ as written.
 **Test that catches it now.** `test_races.py::test_r2_upgrade_loses_the_race`,
 and R3, R4, R6 and R8 would all catch it too: any race whose arc is a forward
 into a transient state.
+
+---
+
+## B17. A race test that passed without ever exercising its race (Phase 10, testbench)
+
+**Symptom.** `scenario_r5` -- the PutE-from-a-non-owner case, part of the
+Phase 7 and Phase 8 gates -- had passed since the day it was written. The first
+time it was run under the arc probe it failed immediately:
+
+```
+AssertionError: the interleaving never happened: bank 0 was never shown
+  PutE(non-owner) in any state. tile 0's PutE was not delayed past tile 1
+  taking the line, so the owner check was never exercised.
+```
+
+**How it was localized.** The witness names the missing event, so there was
+nothing to localize: the directory had never seen a PutE from a non-owner, in
+any state, at any point in the run.
+
+**Root cause.** The scenario used two addresses, `a0` and `a0 + 8192`, and
+relied on the second access evicting the first. They share an L1 set -- but the
+L1 is **two-way**, so they landed in different ways and nothing was ever
+evicted. With no eviction there was no PutE, and with no PutE there was nothing
+for the owner check to get wrong. Every assertion in the test was about the
+final values, and those values were correct for reasons that had nothing to do
+with the arc in the test's name.
+
+The deeper cause is the shape of the test, not the arithmetic. A test that
+checks only outcomes cannot distinguish "the machine handled this correctly"
+from "this never happened". Both look like a pass.
+
+**Fix.** Three lines in one set, so the third access forces the first out, and
+a wait on a named condition -- tile 0's MSHR reaching `EI_A` -- rather than a
+fixed number of cycles. Then every race test in the catalogue asserts a witness
+from the probe before it asserts anything about values, and `make mutate`
+checks the other direction: delete the arc and the test must fail.
+
+With the scenario fixed, `mutate --race R5` kills it, and `PutE(non-owner)` is
+observed at the directory in state M.
+
+**Test that catches it now.** The witness inside
+`test_races.py::test_r5_pute_from_non_owner` catches it directly, and the
+mutation `r5-drop-put-owner-check` catches it from the other side. The same
+repair applies to the copies of this scenario in the Phase 7 and Phase 8 gates,
+which share the body.
+
+---
+
+## B18. No liveness bound on the MSHR, so a cache-side deadlock was silent (Phase 10, missing assertion)
+
+**Symptom.** With the VC allocator's eligibility filter reverted -- bug B14 put
+back deliberately as the R12 mutation -- the R12 test failed like this:
+
+```
+AssertionError: 16 operation(s) still outstanding after 40000 cycles
+```
+
+That is the testbench giving up. No assertion fired anywhere in the design.
+
+**How it was localized.** The specification calls for two liveness bounds:
+every TBE retires within `TBE_TIMEOUT`, every MSHR within `MSHR_TIMEOUT`.
+`TBE_TIMEOUT` and `MSHR_TIMEOUT` were both defined in `coh_pkg`, and grepping
+for the second one found exactly one hit: its own definition. Only the
+directory end had ever been checked.
+
+**Root cause.** The deadlock B14 produces is at the *cache* end for this
+traffic pattern: four caches with all four MSHRs waiting on responses that the
+allocator is starving. The directory's TBEs were not the ones stuck, so the
+only bound that existed did not fire, and the failure surfaced as a testbench
+timeout hundreds of thousands of cycles later.
+
+A testbench watchdog is not a deadlock detector. It fires long after the fact,
+in the wrong process, and says only that something did not finish.
+
+**Fix.** `mshr_file` now carries the same bound the TBE file does, with the
+timeout as a module parameter so a suspected deadlock can be told apart from a
+slow path by raising it. The same run now stops with:
+
+```
+mshr_file.sv:210: Assertion failed in
+  system_top.gen_tile[2].u_tile.u_l1.u_mshr.gen_mshr_asserts[0].a_mshr_liveness:
+  mshr_file: entry 0 for line d1c has been live 1000 cycles, exceeding the
+  liveness bound -- whatever it is waiting for is not coming
+```
+
+naming the tile, the entry and the line, on the cycle the bound was crossed.
+
+While adding it, the age counter moved out of `tbe_e` and into the
+`ifndef SYNTHESIS` block of the file that reads it. It exists only for the
+assertion, and a synthesizable structure carrying a field the design never
+reads is an invitation for somebody to use it.
+
+**Test that catches it now.** `make mutate RACE=R12`. The margin is reported
+rather than assumed: under R12's deliberately adversarial hold the worst
+observed MSHR age is 315 cycles against the 1000-cycle bound and the worst TBE
+age 212 against 500.

@@ -579,3 +579,146 @@ adds a response that both agents can receive, it must be split in two rather
 than tagged -- and the pressure on the 5-bit type field is real (23 of 32
 encodings are now used). The alternative was one bit in every flit; this is one
 encoding per case, and it is the cheaper trade while cases are rare.
+
+---
+
+## D19. Every race test asserts a witness before it asserts a value
+
+**Decision.** Each of the twelve directed race tests asserts, from
+`tb/models/probe.py`, that the exact `(state, event)` pair it is named after
+was presented to the controller. Only then does it check values. The probe
+reads the controllers' own decision-point signals -- `vn1_state` / `vn1_event`
+at the cache, `old_meta_q.dir_state` / `dir_event` at the directory -- and
+records an event when it is *presented*, not when it is accepted.
+
+**Alternatives.** (a) Check outcomes only, and rely on mutation testing to
+prove the test is doing work. (b) Add coverage points in RTL and read them at
+the end. (c) Reconstruct the interleaving from a message trace in the
+testbench.
+
+**Why.** (a) is the status quo of most protocol testbenches and it is not
+enough, for a reason this project has a name for: race R5 passed for three
+phases while never producing the message it was named after (bug B17). Mutation
+testing would eventually have caught it -- and did, the moment it was run --
+but a mutation run is minutes and a witness is one line, and the witness says
+*which* interleaving failed to happen rather than just that something is wrong.
+The two are complements: the witness proves the test reached the race, the
+mutation proves the race mattered.
+
+(c) was rejected because a testbench-side reconstruction is a second
+implementation of the protocol's message semantics, and the two drift. Reading
+the controller's own inputs cannot drift: if the probe and the controller
+disagree about what event this is, the probe is reading the wrong wire and
+every test fails loudly.
+
+**Presented, not accepted, and that distinction is load-bearing.** A cell whose
+action is `stall` is never accepted -- `vn1_ready_o` stays low -- so a probe
+that recorded accepted events would silently miss every stall arc, which is
+half the catalogue. R6 (`IM_AD + Fwd-GetM -> stall`) failed its witness for
+exactly this reason before the probe was fixed. Recording on `valid` also makes
+the probe agree with the RTL's own legality assertion, which samples the same
+condition.
+
+**Cost.** A stalled message presents the same pair every cycle, so consecutive
+repeats have to be collapsed, and a "count" is then a number of distinct
+presentations rather than of cycles -- a subtlety that has to be documented
+where the counts are used (R6, R10). The probe also reads hierarchical
+internals, which is exactly what `docs/decisions.md` D-for-debug-bus argues
+against for the *checker*. The difference is the audience: the SWMR checker is
+a correctness monitor that must survive elaboration, while the probe is a
+debugging instrument for twelve specific tests, and pinning it to internal
+signal names is acceptable there because those tests are rewritten whenever the
+controller is.
+
+---
+
+## D20. Liveness bounds are assertions inside the design, and their margin is measured
+
+**Decision.** Both ends of every transaction carry a liveness bound as an SVA
+assertion: `mshr_file` asserts no entry stays valid longer than `MSHR_TIMEOUT`
+(1000 cycles), `tbe_file` the same with `TBE_TIMEOUT` (500). Both bounds are
+module parameters. The age counters they read are declared inside
+`` `ifndef SYNTHESIS `` and are not fields of `mshr_e` or `tbe_e`.
+
+**Alternatives.** (a) A testbench watchdog: give up after N cycles with nothing
+outstanding having completed. (b) One bound, at the directory only. (c) Keep
+the age in the transaction structure, as the TBE file originally did.
+
+**Why not a watchdog.** A deadlock does not produce a wrong value; it produces
+silence. A watchdog fires long after the fact, in the wrong process, and says
+only that something did not finish. The difference is not theoretical -- it was
+measured. With the VC allocator's eligibility filter removed, R12 failed with:
+
+```
+AssertionError: 16 operation(s) still outstanding after 40000 cycles
+```
+
+and after the MSHR bound was added, the same run failed with:
+
+```
+mshr_file.sv: entry 0 for line d1c has been live 1000 cycles, exceeding the
+liveness bound -- whatever it is waiting for is not coming
+```
+
+naming the tile, the entry and the line, on the cycle the bound was crossed,
+400,000 cycles earlier than the watchdog would have.
+
+**Why both ends.** The directory-only bound existed for three phases and did
+not fire for the deadlock above, because for that traffic pattern the stuck
+transactions were at the caches (bug B18). "The TBE bound covers it" is only
+true for deadlocks the directory is part of.
+
+**Why parameters.** Raising the bound is how a suspected deadlock is told apart
+from a slow path: if the run completes with the bound at ten times the default
+it was latency, and if it still fires it was a deadlock. That measurement is
+what settled bug B14, where the worst TBE age went from 8000 (the raised bound,
+still firing) to 54 after the fix.
+
+**Why the counter is not in the struct.** It exists only so an assertion can
+read it. A synthesizable structure carrying a field the design never reads is
+an invitation for somebody to use it, and then the verification counter is
+load-bearing logic.
+
+**Cost.** A bound is a number, and a number that is too tight is a flake
+generator. So the margin is reported, not assumed: every stress test prints the
+worst age it observed against the bound. Under R12's deliberately adversarial
+hold that is 315 of 1000 at the cache and 212 of 500 at the directory -- a 3x
+and 2x margin, which is thin enough to be worth watching and is why it is
+printed on every run rather than checked once.
+
+---
+
+## D21. A mutation table, and R10 has no entry in it
+
+**Decision.** `scripts/mutations.py` lists one or two single-line RTL
+mutations per race, each naming the test that must then fail.
+`scripts/mutate.py` applies them one at a time, runs only that test, restores
+the file, and reports any mutation the test failed to notice. `make mutate` is
+part of the gate. Race R10 deliberately has no mutation.
+
+**Alternatives.** (a) Trust that a passing test suite means the design is
+tested. (b) Generate mutations automatically -- flip operators, drop
+statements -- as academic mutation testing does. (c) Mutate and run the *whole*
+suite for each.
+
+**Why.** (a) is what the project believed until R5's witness failed. (b)
+produces mostly equivalent or trivially-fatal mutants and buries the signal;
+what is wanted here is not a mutation score but a specific claim -- *this test
+is sensitive to this arc* -- and that requires hand-chosen mutations that
+delete a protocol arc rather than corrupt an expression. (c) would make the
+suite twelve times slower for no extra information: the claim is about one test
+and one arc, and other tests failing too is expected and uninteresting.
+
+**Why R10 has no entry.** R10 is the false-sharing storm. It is not a
+correctness property -- nothing about it is incorrect, and there is no arc that
+handles it. Its value is the number it reports (0.97 ownership transfers per
+store for data that is never shared). Inventing a mutation for it would be
+claiming coverage that does not exist, so the table records the gap explicitly
+and `make mutate` prints it as `n/a` with the reason.
+
+**Cost.** The table is hand-maintained and each entry names exact source text,
+so a refactor of the state tables breaks it. The runner turns that into a loud
+`BROKEN` verdict -- it requires the text to appear exactly once -- rather than
+a silent skip, which is the failure mode that would matter. It also edits `rtl/`
+in place, so it refuses to start if those files have uncommitted changes:
+"restored" has to mean restored.
