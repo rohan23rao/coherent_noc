@@ -4,7 +4,7 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 3
+// Current count: 4
 
 // coh_pkg declares the complete parameter set up front, so parameters read only
 // by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
@@ -26,3 +26,12 @@ lint_off -rule UNUSEDSIGNAL -file "*coh_pkg.sv"
 // explicitly annotated as unreset -- is enforced directly by
 // scripts/check_style.sh check 3, which is stricter than this rule.
 lint_off -rule SYNCASYNCNET
+
+// PINCONNECTEMPTY fires where an instance deliberately leaves an output
+// unconnected by writing `.count_o()`. The alternative -- omitting the pin
+// entirely -- hides the fact that the output exists, and connecting it to a
+// dummy signal just moves the complaint to UNUSEDSIGNAL. Writing the empty
+// connection explicitly is the most readable of the three, and it is checked by
+// review: an output that should have been used is a design error the reader can
+// see, whereas an omitted pin is invisible.
+lint_off -rule PINCONNECTEMPTY

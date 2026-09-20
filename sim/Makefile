@@ -28,6 +28,12 @@ RTL_SRCS := \
 	$(RTL_DIR)/lib/fifo.sv \
 	$(RTL_DIR)/lib/skid_buffer.sv \
 	$(RTL_DIR)/lib/sram_1rw.sv \
+	$(RTL_DIR)/noc/route_compute.sv \
+	$(RTL_DIR)/noc/input_unit.sv \
+	$(RTL_DIR)/noc/vc_allocator.sv \
+	$(RTL_DIR)/noc/switch_allocator.sv \
+	$(RTL_DIR)/noc/crossbar.sv \
+	$(RTL_DIR)/noc/router.sv \
 	$(RTL_DIR)/top/system_top.sv
 
 VERILATOR_LINT_FLAGS_BASE := \
@@ -39,7 +45,7 @@ VERILATOR_LINT_FLAGS := $(VERILATOR_LINT_FLAGS_BASE) --top-module $(TOP)
 
 WAIVERS := $(ROOT)/lint/waivers.vlt
 
-.PHONY: all lint lint-rtl lint-style lint-libs test waves mutate clean help
+.PHONY: all lint lint-rtl lint-style lint-libs lint-slang test waves mutate clean help
 
 all: lint test
 
@@ -47,7 +53,7 @@ all: lint test
 # Lint: Verilator -Wall with zero warnings, plus the structural checks Verilator
 # does not perform. Both must pass.
 #------------------------------------------------------------------------------
-lint: lint-style lint-rtl lint-libs
+lint: lint-style lint-rtl lint-libs lint-slang
 
 lint-rtl:
 	@echo "== verilator --lint-only -Wall =="
@@ -63,6 +69,21 @@ lint-style:
 # module is fully linted the day it is written rather than the day it is wired
 # in.
 LIB_MODULES := reset_sync rr_arbiter credit_counter fifo skid_buffer sram_1rw
+NOC_MODULES := route_compute crossbar input_unit vc_allocator switch_allocator router
+
+# A second, independent SystemVerilog front end. slang's elaboration is
+# stricter than Verilator's in different places, so a warning from either is
+# worth acting on. Skipped with a notice if slang is not installed, so the gate
+# still runs on a machine that only has Verilator.
+SLANG ?= $(shell test -x /opt/slang/bin/slang && echo /opt/slang/bin/slang || command -v slang)
+
+lint-slang:
+	@if [ -n "$(SLANG)" ]; then \
+	  echo "== slang --lint-only =="; \
+	  $(SLANG) --lint-only $(RTL_SRCS) || exit 1; \
+	else \
+	  echo "== slang: not installed, skipping second-opinion lint =="; \
+	fi
 
 lint-libs:
 	@echo "== verilator -Wall, each library module as its own top =="
@@ -70,6 +91,17 @@ lint-libs:
 	  printf '  %-16s ' "$$m"; \
 	  $(VERILATOR) $(VERILATOR_LINT_FLAGS_BASE) --top-module $$m \
 	    $(WAIVERS) $(RTL_DIR)/pkg/coh_pkg.sv $(RTL_DIR)/lib/$$m.sv \
+	    > /dev/null 2>$(CURDIR)/.lint_$$m.err || true; \
+	  if [ -s $(CURDIR)/.lint_$$m.err ]; then \
+	    echo "FAIL"; cat $(CURDIR)/.lint_$$m.err; rm -f $(CURDIR)/.lint_*.err; exit 1; \
+	  else \
+	    echo "clean"; rm -f $(CURDIR)/.lint_$$m.err; \
+	  fi; \
+	done
+	@for m in $(NOC_MODULES); do \
+	  printf '  %-18s ' "$$m"; \
+	  $(VERILATOR) $(VERILATOR_LINT_FLAGS_BASE) --top-module $$m \
+	    $(WAIVERS) $(RTL_SRCS) \
 	    > /dev/null 2>$(CURDIR)/.lint_$$m.err || true; \
 	  if [ -s $(CURDIR)/.lint_$$m.err ]; then \
 	    echo "FAIL"; cat $(CURDIR)/.lint_$$m.err; rm -f $(CURDIR)/.lint_*.err; exit 1; \

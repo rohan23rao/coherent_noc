@@ -82,8 +82,12 @@ def run(
         build_args += ["--trace", "--trace-structs"]
 
     runner = get_runner("verilator")
+    # coh_pkg always goes first: every module imports it, and a missing package
+    # shows up as a confusing "Import package not found" rather than as a
+    # missing-file error.
+    ordered = [str(WAIVERS), str(PKG)] + [str(s) for s in sources if Path(s) != PKG]
     runner.build(
-        sources=[str(WAIVERS)] + [str(s) for s in sources],
+        sources=ordered,
         hdl_toplevel=toplevel,
         parameters=parameters,
         build_args=build_args,

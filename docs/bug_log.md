@@ -100,3 +100,57 @@ VC buffer sizing in Phase 3.
 `test_unit_fifo.py::test_full_refuses_write_even_with_concurrent_read`, which
 now fails in the other direction -- if someone "optimizes" `wr_ready_o` to
 depend on `rd_ready_i`, the test fails on the `refused` assertion.
+
+---
+
+## B3. Credit return was combinational, so observers saw it a cycle early (Phase 2, RTL)
+
+**Symptom.** Four of five standalone router tests failed on an in-RTL assertion
+rather than on a testbench check:
+
+```
+input_unit.sv:193: Assertion failed in
+  router.gen_input_unit[2].u_input_unit.gen_vc_asserts[0].a_head_only_when_idle:
+  head flit arrived at VC 0 in state 2 -- the upstream reallocated an output VC
+  before this VC drained
+```
+
+State 2 is `VC_ALLOC`: a head arrived at a VC that already owned an output VC
+and was mid-packet.
+
+**Localization.** The testbench harness deliberately mirrors the router's own VC
+discipline -- it will not start a packet on an input VC until the DUT returns
+that VC's *tail* credit -- so either the harness was releasing a VC too early or
+the DUT was signalling the release too early. Comparing the two, the harness
+samples all DUT outputs just after the clock edge, which is correct for a
+registered output and wrong for a combinational one. `credit_valid_o`,
+`credit_vc_o` and `credit_tail_o` were driven from an `always_comb` block keyed
+on `sa_grant_i`.
+
+**Root cause.** The credit return was combinational, so it asserted during the
+cycle the tail was *being read*, and by the time the clock edge had passed it
+already reflected the next cycle's switch-allocation decision. Any observer
+sampling post-edge -- the harness, and equally a real upstream router that
+registers its credit counter -- therefore saw the tail credit associated with
+the wrong cycle, and released the output VC one cycle before the input VC had
+actually drained. This also violated hard constraint 3: a credit return crosses
+a link, so it must be registered, and combinationally it would have put the
+upstream's credit counter directly on this router's allocation critical path.
+
+**Fix.** Registered the three credit-return outputs in `input_unit`. The flit
+select `sa_flit_o` stays combinational, and is documented as such, because it
+feeds the crossbar inside the same pipeline stage. The cost is one extra cycle
+of credit round-trip latency, which is now an input to the Phase 3 buffer-depth
+analysis rather than an unmodelled assumption.
+
+**Test that catches it now.** `input_unit`'s own `a_head_only_when_idle`, which
+is what found it, exercised by
+`test_noc_router.py::test_random_traffic_no_loss_or_duplication` and
+`::test_slow_credit_return_throttles_but_never_drops`. Reverting the credit
+return to combinational makes both fail within a few hundred cycles.
+
+**Worth noting.** The assertion that caught this was written in the same commit
+as the bug, for a condition I expected to be structurally impossible. It fired
+on the first run of real traffic. That is the argument for writing the
+"can't happen" assertions rather than reasoning that they cannot happen -- the
+same argument the spec makes for R8.

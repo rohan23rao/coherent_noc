@@ -146,6 +146,20 @@ package coh_pkg;
   } vnet_e;
 
   //---------------------------------------------------------------------------
+  // Per-input-VC state in a router input unit.
+  //   I = empty
+  //   R = head buffered and routed, awaiting an output VC
+  //   V = output VC granted, head not yet sent
+  //   A = head sent, body/tail flowing
+  //---------------------------------------------------------------------------
+  typedef enum logic [1:0] {
+    VC_IDLE    = 2'd0,
+    VC_ROUTED  = 2'd1,
+    VC_ALLOC   = 2'd2,
+    VC_ACTIVE  = 2'd3
+  } vc_state_e;
+
+  //---------------------------------------------------------------------------
   // L1 coherence states: 4 stable + 9 transient.
   // Superscript A = awaiting acks, D = awaiting data (Sorin/Hill/Wood primer).
   //---------------------------------------------------------------------------
@@ -315,6 +329,21 @@ package coh_pkg;
 
   function automatic logic [MESH_Y_W-1:0] tile_y(input logic [TILE_ID_W-1:0] id);
     return id[MESH_X_W +: MESH_Y_W];
+  endfunction
+
+  // A VC's index within a port is {vnet, vc_id}. VCS_PER_VNET is a power of two
+  // so this is concatenation, not arithmetic.
+  function automatic logic [VC_SEL_W-1:0] vc_index(
+      input vnet_e vn, input logic [VC_ID_W-1:0] vc);
+    return {VC_SEL_W'(vn), vc}[VC_SEL_W-1:0];
+  endfunction
+
+  function automatic vnet_e vc_to_vnet(input logic [VC_SEL_W-1:0] idx);
+    return vnet_e'(idx[VC_SEL_W-1 : VC_ID_W]);
+  endfunction
+
+  function automatic logic [VC_ID_W-1:0] vc_to_id(input logic [VC_SEL_W-1:0] idx);
+    return idx[VC_ID_W-1:0];
   endfunction
 
   function automatic logic is_stable_l1(input l1_state_e s);

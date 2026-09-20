@@ -6,4 +6,10 @@
 ../rtl/lib/fifo.sv
 ../rtl/lib/skid_buffer.sv
 ../rtl/lib/sram_1rw.sv
+../rtl/noc/route_compute.sv
+../rtl/noc/input_unit.sv
+../rtl/noc/vc_allocator.sv
+../rtl/noc/switch_allocator.sv
+../rtl/noc/crossbar.sv
+../rtl/noc/router.sv
 ../rtl/top/system_top.sv

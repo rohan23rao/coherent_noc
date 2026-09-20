@@ -197,3 +197,42 @@ beat per cycle, because the FIFO settles at an occupancy of `DEPTH-1` where
 sustains full-duplex traffic at an effective occupancy of 3, not 4, and that is
 the figure that must be compared against the credit round-trip latency in the
 Phase 3 sizing analysis -- not the nominal depth.
+
+---
+
+## D9. An output VC is released on the tail *credit*, not on the tail *send*
+
+**Decision.** `router` marks an output VC busy when `vc_allocator` grants it, and
+clears it only when the downstream returns the credit carrying `credit_tail`.
+
+**Why.** The route for a packet is computed at buffer-write time and stored in
+the downstream input VC's state (`vc_out_port_q`). That state is per-VC, not
+per-packet, so it can hold exactly one packet's routing decision at a time. The
+conventional rule -- free the output VC as soon as the tail is *sent* -- opens a
+window: the upstream may allocate that VC to a new packet and send its head
+while the downstream VC still holds the previous packet's flits and its routing
+state. The head would overwrite `vc_out_port_q` mid-packet, and the remaining
+body flits of the old packet would be switched to the new packet's output port.
+That is silent misrouting, not a stall, and it would show up as "lost" flits far
+from the cause.
+
+**Alternatives considered.**
+
+- *Per-flit route storage, or a small per-VC queue of routing decisions.* This is
+  what a throughput-optimized router does, and it is the right answer at scale.
+  Rejected here because it makes the input unit hold a variable number of
+  packets, which multiplies the state space that the Phase 2 assertions have to
+  cover, for throughput this design does not need.
+- *Free the VC on tail send and forbid back-to-back allocation by convention.*
+  Rejected: "by convention" is not checkable, and the failure mode is silent.
+
+**Cost.** One credit round trip of extra occupancy on every output VC: the VC
+sits allocated but idle from the moment the tail departs until the credit comes
+back. With `VCS_PER_VNET = 2` the sibling VC covers the gap, so a single vnet can
+still stream continuously, and the measured random-traffic runs show no stalls
+attributable to it. At `VCS_PER_VNET = 1` this choice would roughly halve
+per-vnet throughput, which is the honest statement of what it costs.
+
+The mechanism is also why the credit return carries a `credit_tail` bit at all.
+That bit is the only thing distinguishing "a buffer slot freed" from "the packet
+is done", and the two must not be conflated.
