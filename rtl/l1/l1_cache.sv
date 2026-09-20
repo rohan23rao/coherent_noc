@@ -1012,9 +1012,15 @@ module l1_cache
     vn2_take |-> vn2_hit)
     else $error("l1_cache: tile %0d got a VN2 response for line %0h with no MSHR -- the response has nowhere to go", tile_id_i, vn2_msg_i.addr);
 
+  // $signed is not decoration. A packed struct is unsigned as a whole, and a
+  // member read out of one does not reliably carry its own signedness, so
+  // `ack_cnt <= 0` compares a two's-complement -1 as 15 and fires on exactly
+  // the early-ack case this design is built around. The protocol itself was
+  // never affected because completion tests `== 0`, which is sign-agnostic --
+  // only the comparison here was wrong. Bug B13.
   a_ack_never_positive_after_data : assert property (@(posedge clk) disable iff (!rst_n)
-    (vn2_take && vn2_hit && vn2_act.ack_add) |-> (mshr[vn2_idx].ack_cnt <= '0))
-    else $error("l1_cache: tile %0d credited an AckCount onto an already-positive count -- Data arrived twice", tile_id_i);
+    (vn2_take && vn2_hit && vn2_act.ack_add) |-> ($signed(mshr[vn2_idx].ack_cnt) <= 0))
+    else $error("l1_cache: tile %0d credited an AckCount onto a count of %0d -- Data arrived twice", tile_id_i, $signed(mshr[vn2_idx].ack_cnt));
 `endif
 
 endmodule : l1_cache

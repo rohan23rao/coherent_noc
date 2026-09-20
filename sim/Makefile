@@ -43,6 +43,9 @@ RTL_SRCS := \
 	$(RTL_DIR)/l2/l2_bank.sv \
 	$(RTL_DIR)/l2/tbe_file.sv \
 	$(RTL_DIR)/l2/dir_ctrl.sv \
+	$(RTL_DIR)/lib/msg_hold.sv \
+	$(RTL_DIR)/tile/tile_nic.sv \
+	$(RTL_DIR)/tile/tile_top.sv \
 	$(RTL_DIR)/top/system_top.sv
 
 VERILATOR_LINT_FLAGS_BASE := \
@@ -77,8 +80,8 @@ lint-style:
 # yet partially unchecked. Lint each library module as its own top as well, so a
 # module is fully linted the day it is written rather than the day it is wired
 # in.
-LIB_MODULES := reset_sync rr_arbiter credit_counter fifo skid_buffer sram_1rw
-NOC_MODULES := route_compute crossbar input_unit vc_allocator switch_allocator router noc_top mem_model mshr_file l1_coh_fsm dir_coh_fsm l1_cache l2_bank tbe_file dir_ctrl
+LIB_MODULES := reset_sync rr_arbiter credit_counter fifo skid_buffer sram_1rw msg_hold
+NOC_MODULES := route_compute crossbar input_unit vc_allocator switch_allocator router noc_top mem_model mshr_file l1_coh_fsm dir_coh_fsm l1_cache l2_bank tbe_file dir_ctrl tile_nic tile_top
 
 # A second, independent SystemVerilog front end. slang's elaboration is
 # stricter than Verilator's in different places, so a warning from either is

@@ -4,7 +4,7 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 7
+// Current count: 8
 
 // coh_pkg declares the complete parameter set up front, so parameters read only
 // by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
@@ -67,3 +67,12 @@ lint_off -rule UNUSEDSIGNAL -file "*l1_cache.sv"
 // two struct definitions, two packetization paths in the NIC, and a conversion
 // at every boundary, to save seven bits of register.
 lint_off -rule UNUSEDSIGNAL -file "*dir_ctrl.sv"
+
+// tile_nic carries whole flits and whole messages through paths that do not
+// consume every field: an incoming flit's destination coordinates were already
+// used by the router that delivered it, an outgoing message's own dst is
+// encoded into the flit header rather than read again, and the two-way VN2
+// arbiter's grant is used one-hot so only one bit is read. Narrowing the types
+// per path would mean a struct per direction and a conversion at every
+// boundary, which is a worse trade than this waiver.
+lint_off -rule UNUSEDSIGNAL -file "*tile_nic.sv"

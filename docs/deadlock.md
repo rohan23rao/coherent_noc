@@ -101,9 +101,77 @@ as the one above.
 
 ## 2. Protocol deadlock: the message dependency graph
 
-*Filled in as the coherence phases land. The design intent, from the
-specification: a request may cause a forward, a forward may cause a response,
-and a response causes nothing. Three levels of dependency means three virtual
-networks, and the argument only holds if the last level is a true sink -- a VN2
-message must always be accepted by its destination in bounded time without the
-destination needing to send anything first.*
+**Claim.** Three virtual networks are sufficient, and necessary.
+
+**The dependency chain.** A request may cause a forward. A forward may cause a
+response. A response causes nothing.
+
+```
+VN0 request   GetS, GetM, PutS, PutM, PutE        L1 -> directory
+     |                                            directory -> memory
+     v  may cause
+VN1 forward   Fwd-GetS, Fwd-GetM, Inv, Put-Ack,   directory -> L1
+     |        Recall
+     v  may cause
+VN2 response  Data, DataE, Data-from-owner,       L1 -> L1, L1 -> directory,
+              Inv-Ack, WB-Data                    directory -> L1, memory -> directory
+     |
+     x  causes nothing
+```
+
+That is a strict partial order, so if each class has its own buffer pool no
+cycle can form in the message dependency graph. **Three levels of dependency,
+three virtual networks** -- not three because there are three kinds of node.
+
+**The sink requirement.** The argument holds only if the last level is a true
+sink: *a VN2 message must always be accepted by its destination in bounded
+time, without the destination needing to send anything first.* That is what
+makes the chain terminate rather than wrap around.
+
+It is met by construction rather than by hope: the MSHR or TBE that will
+consume a response is allocated **before** the request that will produce it is
+sent, so the buffer space for that response is already reserved. An L1's
+`vn2_ready_o` is therefore tied high, and the directory's VN2 input is a queue
+whose fullness is asserted never to occur.
+
+### Where each edge is guarded
+
+| Edge | What could break it | Assertion | Where |
+| --- | --- | --- | --- |
+| VN2 must be accepted | receiver refuses or backs up | `a_vn2_never_backs_up` | `dir_ctrl.sv` |
+| VN2 always has a home | response with no MSHR | `a_vn2_always_lands` | `l1_cache.sv` |
+| VN0 may stall, but not forever | directory wedged in `S_D` | `a_tbe_liveness` | `tbe_file.sv` |
+| A packet keeps its vnet | mis-assignment at injection | `a_vnet_assignment`, `a_vc_in_vnet` | `tile_nic.sv` |
+| A VC carries one vnet | allocator crosses vnets | `a_same_vnet`, `a_no_vnet_change` | `vc_allocator.sv`, `input_unit.sv` |
+| Credits are never lost | a dropped return wedges a VC | `a_pending_body_bound`, `a_tail_credit_not_lost` | `tile_nic.sv` |
+| An event is legal in its state | a table hole absorbed silently | `a_vn1_event_legal`, `a_vn2_event_legal`, `a_no_illegal_event` | `l1_cache.sv`, `dir_ctrl.sv` |
+
+### Where the separation is physically implemented, and what broke
+
+The dependency argument is about *buffer pools*, so it survives only where the
+three networks are genuinely separate. Three bugs in Phase 8 were all the same
+mistake -- a place where the three shared one resource -- and each deadlocked:
+
+* **B11**: the network interface ejected one message per cycle across all VCs,
+  lowest index first. A stalled VN0 slot permanently outranked the VN1 and VN2
+  slots behind it. Fixed by three independent ejection paths.
+* **B14**: the VC allocator's stage-one arbiter picked one VC per input port
+  *before* checking whether an output VC was available, so a blocked VN0 VC won
+  every cycle, never advanced the round-robin pointer, and starved the VN1 and
+  VN2 VCs behind it. Fixed by masking ineligible VCs out of the competition.
+* **B10**: the network interface gave its L1 strict priority over its directory
+  on VN2, starving one response source. Fixed with round-robin.
+
+The lesson is worth stating plainly, because it is the thing an argument on
+paper cannot give you: **three separate queues are not three separate networks
+if anything downstream arbitrates between them without knowing why they are
+separate.** Every one of these passed the direct-connect tests, where the
+shared resource was never contended.
+
+### Why the two VCs per vnet are not part of this argument
+
+They are for head-of-line blocking relief only. Deadlock freedom comes from XY
+routing for the network and from the three virtual networks for the protocol;
+`VCS_PER_VNET = 1` would still be deadlock-free and would simply block more.
+That distinction is a standard follow-up question, and the measured evidence for
+it is in `docs/noc_perf.md`: buffer depth changes throughput, never delivery.

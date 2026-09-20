@@ -412,3 +412,201 @@ the correct statement and does not enumerate exits.
 test with a footprint that overflows a set -- including the 10k randomized
 multi-core run, where it was originally masked by the run stalling for a
 different reason.
+
+---
+
+## B10. The network interface starved one of its two response feeders (Phase 8, RTL)
+
+**Symptom.** Found by inspection while chasing B11 and B12, not by a failing
+test -- which is why it is worth logging.
+
+**Root cause.** A tile has two sources of VN2 responses: its L1 (data forwarded
+to a requester, Inv-Acks) and its directory (data to a requester). The NIC
+selected between them with `vn2_pick_l1 = l1_vn2_valid_i`, i.e. strict priority
+to the L1. Any tile whose L1 has a continuous stream of responses starves its
+own directory indefinitely, and a directory that cannot send is one whose
+requesters' MSHRs age out.
+
+The reasoning that produced the bug is in the comment it replaced: "an L1
+response can be what a directory is waiting on, never the other way round."
+That is true and irrelevant. Both sides carry responses that some *other* node
+is blocked on, so neither may be permanently deferred, regardless of which one
+can block which.
+
+**Fix.** A round-robin arbiter between the two feeders.
+
+**Test that catches it now.** Nothing directly, and that is stated honestly:
+the randomized network run would need a traffic pattern that keeps one L1's
+response path permanently busy. The starvation is bounded by the arbiter's
+fairness, which is measured in `test_unit_rr_arbiter.py`, and the TBE and MSHR
+liveness assertions are what would catch a regression -- eventually.
+
+---
+
+## B11. Ejection across all VCs by lowest index deadlocked the tile (Phase 8, RTL)
+
+**Symptom.** The randomized run over the network tripped the directory's TBE
+liveness bound:
+
+```
+tbe_file: entry 0 for line 110 has been live 500 cycles, exceeding TBE_TIMEOUT
+```
+
+**Localization.** The aged TBE was in `S_D`, waiting for a `Fwd-GetS` response.
+Dumping the L1 states for that line showed the requester in `IS_D` and tile 2
+still in `M` -- so the owner had never acted on the forward.
+
+**Root cause.** The NIC reassembles into one slot per incoming VC, then picked
+ONE completed message per cycle across all six slots by lowest index. VN0's VCs
+are indices 0 and 1, VN1's are 2 and 3, VN2's are 4 and 5. A directory blocked
+head-of-line -- an ordinary and expected condition -- leaves its VN0 slot
+occupied, and that slot then permanently outranks every VN1 and VN2 slot behind
+it.
+
+That is not a fairness problem, it is a deadlock: the VN2 response stuck behind
+the VN0 request is precisely what would have unblocked the directory. It is
+also exactly the failure the specification warns about in requiring the NIC to
+"present independent ready/valid per VNet in both directions so a blocked VN0
+cannot stall VN2", and the mistake was collapsing three logical paths into one
+selector for convenience.
+
+**Fix.** Three independent ejection paths, one per virtual network, each with
+its own selection, its own destination and its own accept. A blocked VN0 now
+blocks only VN0.
+
+**Test that catches it now.**
+`test_protocol_noc.py::test_random_over_network`, via the TBE liveness
+assertion. Reverting to a single selector reproduces it within a few thousand
+cycles.
+
+---
+
+## B12. A tail credit was dropped when a body flit arrived in the same cycle (Phase 8, RTL)
+
+**Symptom.** After fixing B11 the randomized network run still aged out a TBE,
+at the same point. Dumping every tile showed something stranger than a stall:
+
+```
+tile0 NIC rx_full=000000 rx_busy=000000 pk=000 inj_req=000 vcbusy=011101
+tile1 NIC rx_full=000000 rx_busy=000000 pk=000 inj_req=000 vcbusy=000001
+tile2 NIC rx_full=000000 rx_busy=000000 pk=000 inj_req=000 vcbusy=000011
+```
+
+Every queue empty, every packetizer idle, nothing in flight anywhere -- and
+output VCs still marked busy. Tile 0 had both of its VN1 VCs marked busy, so
+its directory could never send another forward; tile 2 had both VN0 VCs, so it
+could never send another request.
+
+**Localization.** "Busy but nothing in flight" says the release mechanism
+failed, not the traffic. An output VC is released when the credit for its tail
+comes back. So a tail credit had gone missing -- one per stuck VC, accumulating
+until a vnet ran out of VCs and that tile's path wedged for good.
+
+**Root cause.** The NIC generated at most one credit per cycle through a single
+write port:
+
+```
+if (flit_valid_i && !flit_i.tail)  credit = body credit for the arriving flit;
+else if (ej_any_accept)            credit = tail credit for the freed slot;
+```
+
+Two credits can become due in the same cycle -- a body flit lands on one VC
+while a previously assembled message is taken from another -- and the `else if`
+silently discarded the second. Under light traffic the coincidence is rare,
+which is why every directed test passed; under randomized load it happens
+often enough to exhaust a vnet's VCs within a few thousand cycles.
+
+The `a_credit_not_dropped` assertion present at the time checked that a credit
+offered to the queue was accepted. It could not fire, because the dropped
+credit was never offered.
+
+**Fix.** Credits are accumulated per VC -- a count of outstanding body credits
+and a tail flag -- and one is emitted per cycle, tails first because a tail
+frees a whole VC while a body frees one slot. Nothing is discarded; credits can
+only be late.
+
+**Test that catches it now.**
+`test_protocol_noc.py::test_random_over_network`, plus two new assertions that
+would have caught it directly: `a_pending_body_bound` (a VC can owe at most
+`VC_DEPTH` body credits) and `a_tail_credit_not_lost` (an accepted message must
+leave a tail credit pending or sent on the next cycle). The second is the one
+that matters -- it asserts the property the old code violated, rather than the
+property the old assertion happened to check.
+
+---
+
+## B13. An assertion on a signed field compared it unsigned (Phase 8, testbench-in-RTL)
+
+**Symptom.** The network run tripped
+`a_ack_never_positive_after_data`: "credited an AckCount onto an
+already-positive count -- Data arrived twice". No data had arrived twice.
+
+**Root cause.** The assertion read `mshr[vn2_idx].ack_cnt <= '0`. `ack_cnt` is
+declared `logic signed`, but it is a member of a packed struct, and a member
+read out of a packed struct does not reliably carry its own signedness -- the
+struct as a whole is unsigned. So a two's-complement `-1` compared as `15`, and
+the assertion fired on exactly the early-ack case the design is built around:
+Inv-Acks overtaking the Data that carries the AckCount, which is race R1 and
+the single most load-bearing detail in the protocol.
+
+**Why the protocol was unaffected.** Every functional use of `ack_cnt` is
+either arithmetic, which is correct in two's complement regardless of
+signedness, or a test against zero, which is sign-agnostic. Only the comparison
+inside the assertion was wrong. An assertion that fires on correct behaviour is
+worse than no assertion: it trains you to discount it.
+
+**Fix.** `$signed(mshr[vn2_idx].ack_cnt) <= 0`, with a comment saying why the
+cast is load-bearing rather than decoration.
+
+**Test that catches it now.** `test_protocol_noc.py::test_random_over_network`,
+which produces early acks routinely under load.
+
+---
+
+## B14. The VC allocator starved every other VC behind a blocked one (Phase 8, RTL)
+
+**Symptom.** After B10, B11 and B12 the network still deadlocked. Raising the
+TBE liveness bound to 8000 cycles showed it was a genuine deadlock, not
+latency: the bound was reached rather than approached.
+
+**Localization.** A full dump at the stall told the story in three lines:
+
+```
+R0 out_vc_busy = ... L:000011          (both LOCAL VN0 output VCs busy)
+R0 in L: state=[1,0,1,1,0,0] outport=['L','L','E','S',...]
+tile0 NIC rxfull=110000                (both VN0 reassembly slots full)
+```
+
+Tile 0's directory was stuck mid-send, so it could not drain its VN0 input --
+ordinary, expected backpressure. But its router's LOCAL input also held two VN1
+packets (VCs 2 and 3, state ROUTED) bound for ports E and S, and both of those
+ports had every output VC free. Traffic that could move was not moving.
+
+**Root cause.** `vc_allocator` is separable input-first: stage one picks one VC
+per input port, stage two arbitrates per output VC. The stage-one arbiter's
+round-robin pointer only advances when a grant is actually *taken*. VC 0 of the
+local input -- a VN0 packet whose output port had no free VN0 VC -- won stage
+one every cycle, produced no candidate, lost stage two, and therefore never
+advanced the pointer. VCs 2 and 3 were never even offered.
+
+So a blocked VN0 stalled VN1 and VN2 *inside the allocator*, which defeats the
+entire purpose of separate virtual networks: the responses that would have
+unblocked the directory were the ones being starved. Every structural
+separation elsewhere -- separate queues in the NIC, separate ejection paths,
+separate credits -- was undone by one shared arbiter.
+
+**Fix.** Eligibility is computed for every input VC before stage one runs: a VC
+whose output port has no free VC in its own vnet does not compete. A blocked VC
+now simply does not request, so the pointer advances past it and the VCs behind
+it are served.
+
+**Fix verified by measurement, not by the absence of a failure.** With the
+bound raised to 8000 the run now completes all 10,000 requests and the worst
+TBE age observed is **54 cycles** -- two orders of magnitude below the 500-cycle
+default, which is therefore left unchanged. Before the fix the same measurement
+hit 8000.
+
+**Test that catches it now.**
+`test_protocol_noc.py::test_random_over_network`, via the TBE liveness
+assertion. This is the bug that most justifies having that assertion at all:
+nothing else in the suite would have distinguished "deadlocked" from "slow".

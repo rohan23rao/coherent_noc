@@ -40,7 +40,44 @@ module vc_allocator
 );
 
   //---------------------------------------------------------------------------
-  // Stage 1: one winning VC per input port.
+  // Eligibility, computed for EVERY input VC before stage 1 runs.
+  //
+  // This is not an optimization. Stage 1 picks one VC per input port and its
+  // round-robin pointer only advances when a grant is actually taken. If a VC
+  // whose output port has no free VC in its vnet were allowed to win stage 1,
+  // it would fail stage 2 every cycle, the pointer would never move, and every
+  // other VC on that input port would be starved for as long as the blockage
+  // lasted. A blocked VN0 would then stall VN1 and VN2 inside the allocator --
+  // defeating the entire point of having separate virtual networks, and
+  // deadlocking the moment the response that would clear the blockage is the
+  // thing being starved. Bug B14.
+  //
+  // Masking the request instead means a blocked VC simply does not compete.
+  //---------------------------------------------------------------------------
+  logic [NUM_PORTS-1:0][VCS_PER_PORT-1:0][VC_SEL_W-1:0] vc_cand;
+  logic [NUM_PORTS-1:0][VCS_PER_PORT-1:0]               vc_cand_valid;
+  logic [NUM_PORTS-1:0][VCS_PER_PORT-1:0]               eligible;
+
+  always_comb begin
+    for (int unsigned p = 0; p < NUM_PORTS; p++) begin
+      for (int unsigned v = 0; v < VCS_PER_PORT; v++) begin
+        automatic vnet_e vn = vc_to_vnet(VC_SEL_W'(v));
+        vc_cand[p][v]       = '0;
+        vc_cand_valid[p][v] = 1'b0;
+        for (int unsigned k = VCS_PER_VNET; k > 0; k--) begin
+          automatic logic [VC_SEL_W-1:0] idx = vc_index(vn, VC_ID_W'(k - 1));
+          if (!out_vc_busy_i[out_port_i[p][v]][idx]) begin
+            vc_cand[p][v]       = idx;
+            vc_cand_valid[p][v] = 1'b1;
+          end
+        end
+        eligible[p][v] = req_i[p][v] && vc_cand_valid[p][v];
+      end
+    end
+  end
+
+  //---------------------------------------------------------------------------
+  // Stage 1: one winning VC per input port, among the ELIGIBLE ones.
   //---------------------------------------------------------------------------
   logic [NUM_PORTS-1:0][VCS_PER_PORT-1:0] s1_gnt;
   logic [NUM_PORTS-1:0]                   s1_valid;
@@ -57,7 +94,7 @@ module vc_allocator
     ) u_s1 (
       .clk         (clk),
       .rst_n       (rst_n),
-      .req_i       (req_i[p]),
+      .req_i       (eligible[p]),
       .take_i      (s1_take[p]),
       .gnt_o       (s1_gnt[p]),
       .gnt_valid_o (s1_valid[p]),
@@ -66,8 +103,7 @@ module vc_allocator
   end
 
   //---------------------------------------------------------------------------
-  // Candidate output VC for each input port's stage-1 winner: the lowest free
-  // VC inside the winner's own vnet on its desired output port.
+  // The stage-1 winner's candidate, already computed above.
   //---------------------------------------------------------------------------
   logic [NUM_PORTS-1:0][PORT_W-1:0]   cand_port;
   logic [NUM_PORTS-1:0][VC_SEL_W-1:0] cand_vc;
@@ -75,19 +111,9 @@ module vc_allocator
 
   always_comb begin
     for (int unsigned p = 0; p < NUM_PORTS; p++) begin
-      automatic vnet_e vn = vc_to_vnet(s1_vc[p]);
       cand_port[p]  = out_port_i[p][s1_vc[p]];
-      cand_vc[p]    = '0;
-      cand_valid[p] = 1'b0;
-      if (s1_valid[p]) begin
-        for (int unsigned k = 0; k < VCS_PER_VNET; k++) begin
-          automatic logic [VC_SEL_W-1:0] idx = vc_index(vn, VC_ID_W'(k));
-          if (!cand_valid[p] && !out_vc_busy_i[cand_port[p]][idx]) begin
-            cand_vc[p]    = idx;
-            cand_valid[p] = 1'b1;
-          end
-        end
-      end
+      cand_vc[p]    = vc_cand[p][s1_vc[p]];
+      cand_valid[p] = s1_valid[p] && vc_cand_valid[p][s1_vc[p]];
     end
   end
 

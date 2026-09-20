@@ -33,8 +33,9 @@
 module dir_ctrl
   import coh_pkg::*;
 #(
-  parameter int unsigned BANK_ID  = 0,
-  parameter bit          ENABLE_E = 1'b0
+  parameter int unsigned BANK_ID     = 0,
+  parameter bit          ENABLE_E    = 1'b0,
+  parameter int unsigned TBE_TIMEOUT_P = TBE_TIMEOUT
 ) (
   input  logic                        clk,
   input  logic                        rst_n,
@@ -265,6 +266,20 @@ module dir_ctrl
   dir_action_t act;
   dir_state_e  next_dir;
 
+  // A transition into S_D needs a TBE. If none is free the request is STALLED
+  // -- left at the head of VN0 and retried -- rather than being allowed to
+  // proceed without one. That is safe for the same reason the S_D stall itself
+  // is safe: every live TBE is waiting on a VN2 message that is guaranteed to
+  // arrive, and VN2 is serviced with absolute priority, so a TBE always frees.
+  // Asserting on exhaustion instead would be treating ordinary backpressure as
+  // a bug.
+  logic tbe_needed;
+  logic tbe_needed_but_full;
+
+  assign tbe_needed = (fsm_q == D_EXEC) && !act.stall && !act.illegal &&
+                      (next_dir == DIR_S_D) && (old_meta_q.dir_state != DIR_S_D);
+  assign tbe_needed_but_full = tbe_needed && !tbe_alloc_ready;
+
   dir_coh_fsm u_fsm (
     .enable_e_i   (ENABLE_E),
     .state_i      (old_meta_q.dir_state),
@@ -405,7 +420,8 @@ module dir_ctrl
       l2_wr_data_en = 1'b1;
       l2_wr_meta    = new_meta_q;
       l2_wr_data    = cur_q.data;
-    end else if ((fsm_q == D_EXEC) && !act.stall && !act.illegal && !act.copy_data_l2) begin
+    end else if ((fsm_q == D_EXEC) && !act.stall && !tbe_needed_but_full &&
+                 !act.illegal && !act.copy_data_l2) begin
       // The COMBINATIONAL new_meta, not the register: new_meta_q is loaded at
       // the end of this same cycle and still holds the previous transaction's
       // value. Using it here silently lagged every metadata update by one
@@ -427,8 +443,7 @@ module dir_ctrl
   //---------------------------------------------------------------------------
   // TBE wiring
   //---------------------------------------------------------------------------
-  assign tbe_alloc_valid     = (fsm_q == D_EXEC) && !act.stall && !act.illegal &&
-                               (next_dir == DIR_S_D) && (old_meta_q.dir_state != DIR_S_D);
+  assign tbe_alloc_valid     = tbe_needed && tbe_alloc_ready;
   assign tbe_alloc_state     = TBE_WB_PEND;
   assign tbe_alloc_addr      = cur_q.addr;
   assign tbe_alloc_way       = cur_way_q;
@@ -438,7 +453,7 @@ module dir_ctrl
                                tbe_lookup_hit;
   assign tbe_free_idx        = tbe_lookup_idx;
 
-  tbe_file u_tbe (
+  tbe_file #(.TIMEOUT (TBE_TIMEOUT_P)) u_tbe (
     .clk               (clk),
     .rst_n             (rst_n),
     .alloc_valid_i     (tbe_alloc_valid),
@@ -516,7 +531,7 @@ module dir_ctrl
         end
 
         D_EXEC: begin
-          if (act.stall) begin
+          if (act.stall || tbe_needed_but_full) begin
             // Leave the message at the head of VN0 and retry.
             fsm_q <= D_IDLE;
           end else begin
@@ -581,9 +596,15 @@ module dir_ctrl
     ((fsm_q == D_LOOK) && !hit) |-> have_free_way)
     else $error("dir_ctrl: bank %0d set %0d is full and back-invalidation does not exist yet (Phase 9)", BANK_ID, cur_set_q);
 
-  a_tbe_alloc_succeeds : assert property (@(posedge clk) disable iff (!rst_n)
+  a_tbe_alloc_into_free : assert property (@(posedge clk) disable iff (!rst_n)
     tbe_alloc_valid |-> tbe_alloc_ready)
-    else $error("dir_ctrl: bank %0d ran out of TBEs", BANK_ID);
+    else $error("dir_ctrl: bank %0d allocated a TBE with none free", BANK_ID);
+
+  // Running out of TBEs is backpressure, not a bug -- but running out and
+  // never recovering is. The TBE liveness bound in tbe_file catches that.
+  a_tbe_pressure_is_transient : assert property (@(posedge clk) disable iff (!rst_n)
+    tbe_needed_but_full |-> !tbe_alloc_valid)
+    else $error("dir_ctrl: bank %0d proceeded into S_D without a TBE", BANK_ID);
 `endif
 
 endmodule : dir_ctrl

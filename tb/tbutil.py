@@ -38,12 +38,21 @@ async def step(dut, settle_ns: int = 1):
     await Timer(settle_ns, "ns")
 
 
-async def reset_dut(dut, cycles: int = 3, drive: dict | None = None):
-    """Hold rst_n low for `cycles`, driving `drive` defaults onto the inputs."""
+async def reset_dut(dut, cycles: int = 3, drive: dict | None = None,
+                    rst_name: str = "rst_n"):
+    """Hold the reset low for `cycles`, driving `drive` defaults onto the inputs.
+
+    `rst_name` selects which reset port to drive: testbench harnesses take a
+    synchronous `rst_n` directly, while system_top takes the raw asynchronous
+    `arst_n` and synchronizes it internally -- which is the point of having a
+    single synchronizer in the top.
+    """
     for name, value in (drive or {}).items():
         getattr(dut, name).value = value
-    dut.rst_n.value = 0
+    rst = getattr(dut, rst_name)
+    rst.value = 0
     for _ in range(cycles):
         await step(dut)
-    dut.rst_n.value = 1
-    await step(dut)
+    rst.value = 1
+    for _ in range(cycles):
+        await step(dut)

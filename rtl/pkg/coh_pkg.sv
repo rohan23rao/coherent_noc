@@ -386,7 +386,11 @@ package coh_pkg;
   // outlives TBE_TIMEOUT means something it is waiting for is never coming,
   // which is a deadlock however it is dressed up.
   //---------------------------------------------------------------------------
-  localparam int unsigned TBE_AGE_W = $clog2(TBE_TIMEOUT + 1) + 1;
+  // Fixed at 16 bits rather than derived from TBE_TIMEOUT, because the bound
+  // is a module parameter that a configuration may raise: deriving the counter
+  // width from the default silently truncates the comparison and the assertion
+  // then fires at `bound mod 2**width` instead of at the bound.
+  localparam int unsigned TBE_AGE_W = 16;
 
   typedef struct packed {
     logic                        valid;
@@ -514,6 +518,28 @@ package coh_pkg;
   // Word select within a line, from the byte offset.
   function automatic logic [WORD_SEL_W-1:0] addr_word_sel(input logic [ADDR_W-1:0] a);
     return a[$clog2(WORD_W/8) +: WORD_SEL_W];
+  endfunction
+
+  // Which virtual network a message class travels on. VNets are assigned by
+  // dependency depth -- request, forward, response -- not by who sends them.
+  function automatic vnet_e msg_vnet(input msg_type_e t);
+    unique case (t)
+      MSG_GETS, MSG_GETM, MSG_PUTS, MSG_PUTM, MSG_PUTE,
+      MSG_MEM_READ, MSG_MEM_WRITE:                       return VN0_REQ;
+      MSG_FWD_GETS, MSG_FWD_GETM, MSG_INV, MSG_PUT_ACK,
+      MSG_RECALL:                                        return VN1_FWD;
+      default:                                           return VN2_RSP;
+    endcase
+  endfunction
+
+  // Whether a message carries a full cache line. Control packets are a single
+  // head+tail flit; data packets are head plus FLITS_PER_LINE body flits.
+  function automatic logic msg_carries_data(input msg_type_e t);
+    unique case (t)
+      MSG_PUTM, MSG_MEM_WRITE, MSG_DATA_DIR, MSG_DATA_E,
+      MSG_DATA_OWNER, MSG_WB_DATA, MSG_MEM_DATA:         return 1'b1;
+      default:                                           return 1'b0;
+    endcase
   endfunction
 
   function automatic logic is_stable_l1(input l1_state_e s);

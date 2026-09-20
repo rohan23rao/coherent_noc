@@ -21,4 +21,7 @@
 ../rtl/l2/l2_bank.sv
 ../rtl/l2/tbe_file.sv
 ../rtl/l2/dir_ctrl.sv
+../rtl/lib/msg_hold.sv
+../rtl/tile/tile_nic.sv
+../rtl/tile/tile_top.sv
 ../rtl/top/system_top.sv

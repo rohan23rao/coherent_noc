@@ -19,7 +19,12 @@
 
 module tbe_file
   import coh_pkg::*;
-(
+#(
+  // The liveness bound. Defaults to the package value; a configuration with a
+  // longer worst-case round trip -- the mesh, versus a direct connection --
+  // raises it to a measured figure rather than an assumed one.
+  parameter int unsigned TIMEOUT = TBE_TIMEOUT
+) (
   input  logic                        clk,
   input  logic                        rst_n,
 
@@ -111,8 +116,8 @@ module tbe_file
   for (genvar i = 0; i < int'(TBE_ENTRIES); i++) begin : gen_tbe_asserts
     // The directory-side deadlock detector. A real assertion, not a warning.
     a_tbe_liveness : assert property (@(posedge clk) disable iff (!rst_n)
-      tbe_q[i].valid |-> (tbe_q[i].age < TBE_AGE_W'(TBE_TIMEOUT)))
-      else $error("tbe_file: entry %0d for line %0h has been live %0d cycles, exceeding TBE_TIMEOUT -- whatever it is waiting for is not coming", i, tbe_q[i].addr, tbe_q[i].age);
+      tbe_q[i].valid |-> (tbe_q[i].age < TBE_AGE_W'(TIMEOUT)))
+      else $error("tbe_file: entry %0d for line %0h has been live %0d cycles, exceeding the liveness bound -- whatever it is waiting for is not coming", i, tbe_q[i].addr, tbe_q[i].age);
   end
 
   a_no_duplicate_address : assert property (@(posedge clk) disable iff (!rst_n)
