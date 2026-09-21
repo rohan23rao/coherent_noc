@@ -515,7 +515,14 @@ package coh_pkg;
   // so this is concatenation, not arithmetic.
   function automatic logic [VC_SEL_W-1:0] vc_index(
       input vnet_e vn, input logic [VC_ID_W-1:0] vc);
-    return {VC_SEL_W'(vn), vc}[VC_SEL_W-1:0];
+    // {vnet, vc_id}, truncated to the VC index width. Written through a local
+    // rather than as a part-select on the concatenation -- `{a, b}[N-1:0]` --
+    // because that form is legal SystemVerilog that the Verilog-2005 front
+    // ends in the open-source flow will not parse, and this function is on the
+    // path of every packet. Identical value, one fewer thing to explain.
+    logic [VNET_W+VC_ID_W-1:0] idx;
+    idx = {VNET_W'(vn), vc};
+    return VC_SEL_W'(idx);
   endfunction
 
   function automatic vnet_e vc_to_vnet(input logic [VC_SEL_W-1:0] idx);

@@ -1256,3 +1256,71 @@ uses `tb/models/tables.py`, which is compared against the RTL cell by cell. The
 enum encodings still in `probe.py` are the remaining exception, and they are
 checked -- every one of them appears in an arc name that a passing table test
 would contradict.
+
+---
+
+## B24. Five `$error` calls in synthesizable RTL (Phase 16, RTL)
+
+**Symptom.** OpenSTA refused to read a gate-level netlist:
+
+```
+Error: 171 .../dir_ctrl.asap7.tt/netlist.v line 744532, syntax error
+```
+
+The line it objected to was not a gate:
+
+```verilog
+  always @*
+    if (_000000_)
+      $write("Error [%0t] .../dir_ctrl.sv:332:11 - dir_ctrl: bank %0d
+              received message type %0d it cannot classify\n", ...);
+```
+
+**How it was localized.** By reading the netlist at the line number, which is
+a thing worth doing before theorising. A `$write` in a mapped netlist can only
+have come from a `$display`-family call in the source, and the message text
+named its own file and line.
+
+**Root cause.** Five `$error` calls sat in `always_comb` and `always_ff`
+bodies, outside the `` `ifndef SYNTHESIS `` guard that every SVA block in this
+design already uses:
+
+| file | what it reports |
+| --- | --- |
+| `l1_cache.sv` | a VN2 message type the decoder cannot classify |
+| `l1_cache.sv` | the same for VN1 |
+| `l1_cache.sv` | the VN1 handler in an illegal state |
+| `dir_ctrl.sv` | a message type the directory cannot classify |
+| `dir_ctrl.sv` | the controller FSM in an illegal state |
+
+They are useful checks and they are not hardware. A synthesis tool is entitled
+to do anything it likes with a `$display` in an `always` block; most ignore it
+with a warning, yosys keeps it as a `$print` cell and writes it out. The design
+had been linted, elaborated with `SYNTHESIS` defined, and run through two
+front ends without any of them objecting, because none of them had to *emit*
+anything.
+
+The sixth `$error`, in `reset_sync.sv`, is a different animal and stays: it is
+inside a generate block, so it is evaluated at elaboration by every tool and
+never reaches a netlist. That is how the module rejects `STAGES < 2`.
+
+**Fix.** Wrap the five in `` `ifndef SYNTHESIS ``, which is what the rest of
+the file already does three lines further down.
+
+**Test that catches it now.** Two, at different distances from the failure.
+
+`scripts/check_style.sh` check 5 rejects any `$error`/`$display`/`$write`/
+`$fatal`/`$monitor` outside the guard, and recognises the elaboration-time
+case by its `begin : gen_*` label so `reset_sync` still passes. It runs in
+`make lint`. Verified by unguarding one of the five and watching it fail with
+the file and line.
+
+And `syn/yosys/oss_synth.py` asserts `select -assert-none t:$print` after
+mapping. Deleting the cells there would have been easy and wrong: it would
+have made the netlist valid and left the RTL defect in place. The flow fails
+instead, and the lint check catches it first.
+
+**Worth noting.** This bug was invisible to every tool in the project until
+something tried to *use* the output. Lint asks whether the RTL is well formed;
+synthesis asks whether it means anything as hardware. Phase 16 exists because
+those are different questions, and this is the first thing it found.

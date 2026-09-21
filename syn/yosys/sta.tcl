@@ -36,6 +36,12 @@ read_liberty $LIB
 # AFTER read_liberty: the units default to the library's (picoseconds, for
 # ASAP7), and setting them earlier is silently ignored.
 set_cmd_units -time ns -capacitance pf -resistance kohm -voltage v
+# The SRAM black boxes, declared with pin directions and no timing at all.
+# syn/yosys/blackbox_lib.py generates it; decision D25 says why it carries no
+# timing arcs rather than invented ones.
+if {[info exists env(STA_BB_LIB)] && [file exists $env(STA_BB_LIB)]} {
+  read_liberty $env(STA_BB_LIB)
+}
 read_verilog $NETLIST
 link_design $TOP
 
@@ -93,6 +99,29 @@ if {$DRIVER ne ""} {
   set_driving_cell -lib_cell $DRIVER [data_inputs]
 }
 set_load $LOAD_PF [data_outputs]
+
+# The array boundary.
+#
+# A black box with no timing arcs has no setup check on its inputs and no
+# arrival at its outputs, so every path that ends at the address logic or
+# starts at the read data would be unconstrained -- and unconstrained is
+# silent. Budgeting half the period on each side is not a model of the array;
+# it is what makes those paths appear in the report at all. The array's own
+# access time is the one number this flow cannot give you: it needs a memory
+# compiler. Same position as syn/constraints/common.sdc.
+set bb [get_cells -quiet -hier -filter "ref_name =~ sram_1rw_*"]
+if {[llength $bb] > 0} {
+  foreach c $bb {
+    foreach p [get_pins -quiet -of_objects $c] {
+      if {[get_property $p direction] eq "input"} {
+        set_max_delay [expr {$PERIOD * 0.50}] -to $p
+      } else {
+        set_max_delay [expr {$PERIOD * 0.50}] -from $p
+      }
+    }
+  }
+  puts "STA: [llength $bb] SRAM black box(es) budgeted at 50% of the period."
+}
 
 # OpenSTA has no `redirect`, so everything goes to stdout and the driver keeps
 # the whole transcript as sta.rpt. One stream, one file, nothing to keep in

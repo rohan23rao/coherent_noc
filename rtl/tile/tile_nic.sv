@@ -163,7 +163,7 @@ module tile_nic
 
   always_comb begin
     for (int unsigned n = 0; n < NUM_VNETS; n++) begin
-      pk_free_vc[n]  = vc_index(vnet_e'(n[VNET_W-1:0]),
+      pk_free_vc[n]  = vc_index(vnet_e'(VNET_W'(n)),
                                 src_vc_id(TILE_ID_W'(TILE_ID)));
       pk_has_free[n] = !out_vc_busy_q[pk_free_vc[n]] &&
                        out_has_credit[pk_free_vc[n]];
@@ -277,7 +277,7 @@ module tile_nic
       ej_vc[n]    = '0;
       for (int unsigned k = VCS_PER_VNET; k > 0; k--) begin
         automatic logic [VC_SEL_W-1:0] idx =
-            vc_index(vnet_e'(n[VNET_W-1:0]), VC_ID_W'(k - 1));
+            vc_index(vnet_e'(VNET_W'(n)), VC_ID_W'(k - 1));
         if (rx_full_q[idx]) begin
           ej_valid[n] = 1'b1;
           ej_vc[n]    = idx;

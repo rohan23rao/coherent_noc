@@ -58,7 +58,7 @@ actually like to get this right.
 | `docs/spec.md` | the build specification, annotated wherever the implementation deviated |
 | `docs/decisions.md` | every non-obvious choice as decision, alternatives, why, cost |
 | `docs/races.md` | twelve races, each with its interleaving, its arc, its test, and the result of deleting that arc |
-| `docs/bug_log.md` | twenty-three bugs: symptom, how it was localised, root cause, fix, the test that catches it now |
+| `docs/bug_log.md` | twenty-four bugs: symptom, how it was localised, root cause, fix, the test that catches it now |
 | `docs/deadlock.md` | the message dependency graph, why three virtual networks suffice, and the separate routing argument |
 | `docs/verification.md` | the six tiers, the coverage report, and an honest list of what is not verified |
 | `docs/noc_perf.md` | load-latency curves, the knee, and what the ordering rule cost |

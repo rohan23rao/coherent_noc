@@ -56,6 +56,31 @@ report "always_ff must use 'or negedge rst_n' or carry a 'no-reset:' note" "$hit
 hits=$(code_lines | grep -E '\balways[[:space:]]*@' || true)
 report "use always_ff / always_comb, not bare always @" "$hits"
 
+# 5. Simulation-only system tasks must be inside `ifndef SYNTHESIS.
+#
+#    Every SVA block in this design already is. Five $error calls were not --
+#    they sat in always_comb and always_ff bodies, where a synthesis tool is
+#    entitled to do whatever it likes with them. yosys kept them, which put a
+#    $write into a gate-level netlist and broke the Verilog reader downstream.
+#    That is bug B24, and this check is what would have caught it.
+#
+#    An elaboration-time $error inside a generate block is a different thing
+#    and stays: it is evaluated when the design elaborates, by every tool, and
+#    it is how reset_sync rejects STAGES < 2. Those are recognised by their
+#    `begin : gen_*` label, which is this repo's convention for generate
+#    blocks, within a few lines above.
+hits=$(find "$RTL_DIR" -name '*.sv' -print0 | xargs -0 awk '
+  FNR == 1 { guard = 0; gen = -99 }
+  /^[[:space:]]*`ifndef[[:space:]]+SYNTHESIS/ { guard++; next }
+  /^[[:space:]]*`ifn?def/                     { if (guard) guard++; next }
+  /^[[:space:]]*`endif/                       { if (guard) guard--; next }
+  /begin[[:space:]]*:[[:space:]]*gen_/        { gen = FNR }
+  guard == 0 && /\$(error|display|write|fatal|warning|info|monitor|strobe)[[:space:]]*\(/ {
+      if (FNR - gen > 3) printf "%s:%d:%s\n", FILENAME, FNR, $0
+  }
+' || true)
+report "simulation-only system tasks must be inside \`ifndef SYNTHESIS" "$hits"
+
 if [ "$fail" -eq 0 ]; then
   echo "style: clean"
 fi

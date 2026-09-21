@@ -169,6 +169,12 @@ dfflibmap -liberty {lib}
 abc -liberty {lib} -D {period_ps} -script +strash;&get,-n;&dch,-f;&nf,-D,{period_ps};&put;buffer,-N,{max_fanout};upsize,-D,{period_ps};dnsize,-D,{period_ps}
 setundef -zero
 opt_clean -purge
+# A $display or $error left outside `ifndef SYNTHESIS survives into the
+# netlist as a $print cell, which yosys then emits as a $write statement and
+# the downstream Verilog reader rejects. That happened (bug B24). Deleting them
+# here would hide it, so the flow asserts they are absent instead -- and
+# scripts/check_style.sh catches it at lint, long before this point.
+select -assert-none t:$print
 rename -top {top}
 write_verilog -noattr {outdir}/netlist.v
 write_blif {outdir}/mapped.blif
@@ -176,7 +182,25 @@ stat -liberty {lib}
 """
 
 
-def opensta(top, lib, netlist, period_ns, outdir, driver=None):
+def blackbox_liberty(netlist, outdir):
+    """Rename black-box instances and emit a pin-only Liberty for them.
+
+    Returns the Liberty path, or None if the netlist has no black boxes --
+    router and tile_nic contain no arrays, so they take that path.
+    """
+    import subprocess as sp
+    lib = os.path.join(outdir, "blackboxes.lib")
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "blackbox_lib.py")
+    r = sp.run([sys.executable, script, netlist, lib],
+               capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stdout + r.stderr)
+        raise SystemExit("blackbox_lib.py failed")
+    return lib if os.path.exists(lib) else None
+
+
+def opensta(top, lib, netlist, period_ns, outdir, driver=None, bb_lib=None):
     """Real static timing, if OpenSTA is installed. See syn/yosys/sta.tcl."""
     sta = shutil.which("sta")
     if not sta:
@@ -184,6 +208,8 @@ def opensta(top, lib, netlist, period_ns, outdir, driver=None):
     env = dict(os.environ,
                STA_LIB=lib, STA_NETLIST=netlist, STA_TOP=top,
                STA_PERIOD_NS=str(period_ns), STA_OUT=outdir)
+    if bb_lib:
+        env["STA_BB_LIB"] = bb_lib
     if driver:
         env["STA_DRIVER"] = driver
     tcl = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sta.tcl")
@@ -266,8 +292,10 @@ def one_run(args, lib, design, period_ps):
 
     area, cells, flops = parse_stat(text)
     period_ns = period_ps / 1000.0
-    sta_res = opensta(args.top, lib, os.path.join(outdir, "netlist.v"),
-                      period_ns, outdir, args.driver)
+    netlist = os.path.join(outdir, "netlist.v")
+    bb_lib = blackbox_liberty(netlist, outdir)
+    sta_res = opensta(args.top, lib, netlist, period_ns, outdir, args.driver,
+                      bb_lib)
     slack, worst_stage, worst_fanout = sta_res if sta_res else (None, None, None)
     achieved = (period_ns - slack) if slack is not None else None
     return {

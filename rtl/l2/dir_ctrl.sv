@@ -328,9 +328,11 @@ module dir_ctrl
         // Only meaningful once a message has actually been latched, and
         // only for messages the table is supposed to classify: a recall
         // response is handled outside it.
+`ifndef SYNTHESIS
         if ((fsm_q == D_EXEC) && !binv_resp) begin
           $error("dir_ctrl: bank %0d received message type %0d it cannot classify", BANK_ID, cur_q.msg_type);
         end
+`endif
       end
     endcase
   end
@@ -797,7 +799,9 @@ module dir_ctrl
 
         default: begin
           fsm_q <= D_IDLE;
+`ifndef SYNTHESIS
           $error("dir_ctrl: bank %0d entered illegal state %0d", BANK_ID, fsm_q);
+`endif
         end
       endcase
     end

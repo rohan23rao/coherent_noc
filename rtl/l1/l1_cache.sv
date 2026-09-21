@@ -247,9 +247,11 @@ module l1_cache
         // Guarded on valid: the bus is all zeros while idle and during reset,
         // and message type 0 is a legal VN0 encoding, so an unguarded check
         // fires before the design has done anything.
+`ifndef SYNTHESIS
         if (vn2_valid_i) begin
           $error("l1_cache: tile %0d got VN2 message type %0d", tile_id_i, vn2_msg_i.msg_type);
         end
+`endif
       end
     endcase
   end
@@ -401,9 +403,11 @@ module l1_cache
       MSG_PUT_ACK:  vn1_event = EV_PUT_ACK;
       default: begin
         vn1_event = EV_INV;
+`ifndef SYNTHESIS
         if (vn1_valid_i) begin
           $error("l1_cache: tile %0d got VN1 message type %0d", tile_id_i, vn1_msg_i.msg_type);
         end
+`endif
       end
     endcase
   end
@@ -994,7 +998,9 @@ module l1_cache
 
         default: begin
           vn1_fsm_q <= V1_IDLE;
+`ifndef SYNTHESIS
           $error("l1_cache: tile %0d illegal VN1 state", tile_id_i);
+`endif
         end
       endcase
 
