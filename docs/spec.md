@@ -23,6 +23,7 @@ it is, `docs/READING_ORDER.md` is the faster route.
 | 8 | SVA | Liveness bounds are module parameters, raised by the stress tier | raising a bound and re-running is how a deadlock is told apart from a slow path (D20, D24) |
 | 9 | Verification | Coverage splits uncovered bins into reachable and by-construction | 26 legal cells are foreclosed by the microarchitecture; each carries a written argument rather than being excluded |
 | 10 | Verification | A fifth stress configuration lifts per-line exclusivity | it is the only way the transient-state forward arcs are reachable, and it found the worst bug in the project |
+| 11 | Repo layout | No `req_gen.sv`; cocotb drives the core ports directly | the stimulus belongs in the same process as the scoreboard that checks it |
 
 ---
 
@@ -535,7 +536,7 @@ rtl/
   noc/crossbar.sv
   noc/noc_top.sv            2x2 mesh wiring
   tile/tile_nic.sv          packetize/depacketize
-  tile/req_gen.sv           synthetic core
+  tile/req_gen.sv           synthetic core        <-- DEVIATION 11, see below
   tile/tile_top.sv
   top/system_top.sv         4 tiles + memory model
   mem/mem_model.sv          behavioral, parameterized latency
@@ -549,6 +550,28 @@ lint/    waivers.vlt
 docs/    spec.md decisions.md races.md deadlock.md bug_log.md
          verification.md noc_perf.md interview_notes.md
 ```
+
+> **DEVIATION 11.** There is no `rtl/tile/req_gen.sv`. Each tile's core
+> request and response channels are ports on `system_top`, driven directly by
+> cocotb.
+>
+> The specification's request generator is an RTL FSM fed by a
+> cocotb-writable command FIFO, which is one more piece of hardware to get
+> right and one more place for a testbench bug to look like a design bug. With
+> the ports exposed, the stimulus lives in the same process as the scoreboard
+> that checks it, which is what makes the driver able to say "this response
+> has no predicted value" for a racing operation -- see
+> `tb/models/multicore.py`. The ports are an ordinary ready/valid interface
+> with a tag, so a `req_gen` could be dropped in later without changing
+> anything below it.
+>
+> Two smaller notes on this layout: the scoreboard is in
+> `tb/models/multicore.py` rather than a separate `scoreboard.py`, because it
+> and the driver share the per-line exclusivity invariant that makes the
+> golden model's answer well defined and splitting them would split that
+> argument; and `tb/sva/` does not exist, because the specification's other
+> option was taken -- every assertion is in `rtl/` under
+> `` `ifndef SYNTHESIS ``, next to the logic it constrains.
 
 Conventions Claude Code must follow without exception:
 
