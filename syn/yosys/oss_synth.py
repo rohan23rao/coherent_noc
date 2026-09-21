@@ -131,7 +131,8 @@ def sv2v_convert(files):
     return dst
 
 
-def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16):
+def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16,
+                 flatten=False):
     # `chparam -set` rewrites the module's own defaults. Passing the same
     # values through `hierarchy -chparam` makes yosys derive a $paramod copy,
     # which then collides with the plain module when `synth -top` re-resolves
@@ -140,6 +141,7 @@ def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16):
     params = "".join(f" -chparam {k} {v}"
                      for k, v in TOP_PARAMS.get(top, {}).items())
     bb = " ".join(BLACKBOX)
+    flatten = " -flatten" if flatten else ""
     return f"""
 read_verilog {design}
 # The arrays and the behavioural memory are black boxes; see decision D25.
@@ -155,7 +157,23 @@ check -assert
 # synth operates on the top hierarchy already selected, and the derived name is
 # renamed back afterwards so OpenSTA can link the design by the name the
 # designer uses.
-synth -flatten
+# NOT flattened, for two reasons that happen to agree.
+#
+# Memory: flattening l1_cache put yosys at 12.8 GB and the kernel killed it.
+# The 256-bit line datapath -- byte-enable merge, fill, the MSHR file's data
+# -- multiplies out into something no optimisation pass wants to hold at once.
+#
+# Reports: the Design Compiler flow keeps hierarchy too, with
+# `compile_ultra -no_autoungroup`, and for the same reason it is worth keeping
+# here. A critical path that names modules is a path you can act on; after a
+# flatten it is a list of gates with no provenance. `--flatten` is there for
+# when the question is how much the boundaries cost.
+synth{flatten}
+# Flop count before technology mapping, where the cells are generic $_DFF_*
+# and the count does not depend on how a particular library spells its
+# registers. Counting mapped cells by name worked for ASAP7 and silently
+# reported zero flops for sky130.
+tee -o {outdir}/stat_premap.txt stat
 dfflibmap -liberty {lib}
 # yosys's default `abc -D` maps for delay but leaves the netlist UNBUFFERED:
 # a net with a thousand sinks keeps whatever gate happened to drive it, and the
@@ -266,10 +284,16 @@ def parse_stat(log):
         m = re.search(r"Number of cells:\s+(\d+)", line)
         if m:
             cells = int(m.group(1))
-    # Flop count: every mapped sequential cell the library named.
-    flops = sum(int(n) for n in re.findall(
-        r"^\s+(?:\\)?(?:DFF|SDFF|ICG|LATCH)\S*\s+(\d+)", log, re.M))
-    return area, cells, flops
+    return area, cells
+
+
+def parse_flops(premap):
+    """Generic sequential cells, counted before technology mapping."""
+    if not os.path.exists(premap):
+        return None
+    txt = open(premap, errors="replace").read()
+    return sum(int(n) for n in re.findall(
+        r"^\s+\$_(?:S?DFF|DFFSR|DLATCH|SR)\S*\s+(\d+)", txt, re.M))
 
 
 def one_run(args, lib, design, period_ps):
@@ -279,7 +303,7 @@ def one_run(args, lib, design, period_ps):
     ys = os.path.join(outdir, "synth.ys")
     with open(ys, "w") as f:
         f.write(yosys_script(design, args.top, lib, period_ps, outdir,
-                             args.max_fanout))
+                             args.max_fanout, args.flatten))
     t0 = time.time()
     log = os.path.join(outdir, "yosys.log")
     r = run(["yosys", "-q", "-l", log, ys])
@@ -290,7 +314,8 @@ def one_run(args, lib, design, period_ps):
             l for l in text.splitlines() if "ERROR" in l) + "\n")
         raise SystemExit(f"yosys failed for {args.top} -- see {log}")
 
-    area, cells, flops = parse_stat(text)
+    area, cells = parse_stat(text)
+    flops = parse_flops(os.path.join(outdir, "stat_premap.txt"))
     period_ns = period_ps / 1000.0
     netlist = os.path.join(outdir, "netlist.v")
     bb_lib = blackbox_liberty(netlist, outdir)
@@ -367,6 +392,9 @@ def main():
     ap.add_argument("--period", type=float, default=500.0,
                     help="abc delay target, in PICOSECONDS for every PDK -- "
                          "abc normalises the Liberty's own time unit")
+    ap.add_argument("--flatten", action="store_true",
+                    help="flatten the hierarchy before mapping; costs memory "
+                         "and the provenance in every report")
     ap.add_argument("--max-fanout", type=int, default=16,
                     dest="max_fanout",
                     help="fanout cap for abc's buffer pass; matches the "
