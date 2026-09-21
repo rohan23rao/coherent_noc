@@ -77,5 +77,6 @@ what it is actually like to get this right.
 
 | # | File | What to look for |
 | --- | --- | --- |
+| — | `docs/synthesis.md` | The numbers, and three paragraphs of caveats before them. Read the caveats: the arrays are black-boxed, so this is the control logic's area, and there is no place and route. |
 | — | `syn/README.md` | The Design Compiler flow, and the first paragraph says the tool has never run it. Read the "what to send back" section before running anything: `check_timing.rpt` matters more than `qor.rpt`, and the reason is the same one that runs through the rest of this project -- a silent gap is worse than a loud failure. |
 | — | `syn/constraints/*.sdc` | The interesting part of a synthesis setup is not `compile_ultra`, it is which ports have a known neighbour. Every budget here is argued in a comment, and a required pattern that matches nothing is an error rather than a silent fallback. |

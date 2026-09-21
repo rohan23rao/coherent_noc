@@ -15,6 +15,7 @@ make all      # lint + test, and what a clean clone must pass
 make waves TEST=<name>
 make diagrams # regenerate docs/img and the state machines
 make -C syn router PDK=saed32   # Design Compiler, if you have one -- see syn/README.md
+make -C syn/yosys asap7         # yosys + OpenSTA, free tools, real numbers
 ```
 
 ## The design in three pictures
@@ -63,6 +64,7 @@ actually like to get this right.
 | `docs/verification.md` | the six tiers, the coverage report, and an honest list of what is not verified |
 | `docs/noc_perf.md` | load-latency curves, the knee, and what the ordering rule cost |
 | `docs/diagrams.md` | every figure, each stating an argument rather than labelling boxes |
+| `docs/synthesis.md` | measured area and timing on ASAP7 and sky130, with the caveats that make them readable |
 | `syn/README.md` | the Design Compiler flow, what it deliberately does not do, and what to send back |
 | `docs/interview_notes.md` | ten hard questions with answers |
 

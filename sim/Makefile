@@ -235,6 +235,12 @@ diagrams-check: diagrams
 	  exit 1; \
 	fi
 
+# The synthesis table in docs/synthesis.md is generated from the runs, not
+# transcribed from them. Same rule as the diagrams: a number a human retyped is
+# a number that can drift from the thing it describes.
+syn-report:
+	@$(PYTHON) $(ROOT)/syn/yosys/collect.py --inject $(ROOT)/docs/synthesis.md
+
 clean:
 	rm -rf obj_dir sim_build $(WAVE_DIR)/*.vcd $(WAVE_DIR)/*.fst
 	find $(TB_DIR) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

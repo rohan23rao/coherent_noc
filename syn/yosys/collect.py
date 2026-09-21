@@ -18,6 +18,33 @@ def rows(outdir):
             yield json.load(fh)
 
 
+def render(outdir):
+    """The table, as a string, so it can be printed or injected."""
+    import io
+    buf, real = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        main(outdir)
+    finally:
+        sys.stdout = real
+    return buf.getvalue().strip()
+
+
+def inject(doc, outdir):
+    """Rewrite the table between the markers in docs/synthesis.md."""
+    import re
+    table = render(outdir)
+    text = open(doc).read()
+    pat = re.compile(r"<!-- BEGIN results -->.*?<!-- END results -->", re.S)
+    if not pat.search(text):
+        raise SystemExit(f"{doc}: no <!-- BEGIN results --> markers")
+    text = pat.sub("<!-- BEGIN results -->\n" + table + "\n"
+                   "<!-- END results -->", text)
+    open(doc, "w").write(text)
+    print(f"{doc}: results table updated "
+          f"({len(list(rows(outdir)))} runs)")
+
+
 def main(outdir):
     data = list(rows(outdir))
     if not data:
@@ -38,18 +65,31 @@ def main(outdir):
         print(f"`{lib}`, arrays black-boxed, SRAM = "
               f"{items[0]['sram']}.\n")
         print("| block | cells | flops | area (um^2) | critical path (ns) | "
-              "f_max (MHz) |")
-        print("| --- | ---: | ---: | ---: | ---: | ---: |")
+              "f_max (MHz) | worst stage (ns) | its fanout |")
+        print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         for d in items:
             cp = d.get("sta_critical_path_ns")
             fm = d.get("fmax_mhz")
+            ws = d.get("worst_stage_ns")
+            wf = d.get("worst_stage_fanout")
             print(f"| `{d['top']}` | {d['cells']:,} | {d['flops']:,} | "
                   f"{d['area_um2']:,.1f} | "
-                  f"{cp if cp is not None else '—'} | "
-                  f"{fm if fm is not None else '—'} |")
+                  f"{f'{cp:.3f}' if cp is not None else '—'} | "
+                  f"{f'{fm:.0f}' if fm is not None else '—'} | "
+                  f"{f'{ws:.3f}' if ws is not None else '—'} | "
+                  f"{wf if wf is not None else '—'} |")
+        print("\nThe last two columns are the flow's limitation, not the "
+              "design's: abc cannot buffer a register-driven net and there is "
+              "no `repair_design` here, so a high-fanout control signal keeps "
+              "whatever single gate drives it. Read the critical path as an "
+              "upper bound and `critical path - worst stage` as a rough "
+              "floor.")
     print()
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1
-         else os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
+    if len(sys.argv) > 2 and sys.argv[1] == "--inject":
+        inject(sys.argv[2], here)
+    else:
+        main(sys.argv[1] if len(sys.argv) > 1 else here)
