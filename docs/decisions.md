@@ -975,3 +975,45 @@ on purpose and watching the dry run fail.
 They do not catch anything about inference, timing, or Design Compiler's own
 dislikes. Verilator is not Design Compiler and a stub is not a tool, and
 neither the README nor this entry pretends otherwise.
+
+
+---
+
+## D27. Scaling is a check that runs, not a paragraph that claims
+
+**Decision.** `make lint-scale` elaborates the whole design at 4, 8, 16 and 64
+tiles on every run of `make lint`, and `system_top` carries elaboration-time
+guards that fail with the offending parameter named. The claim "the parameters
+are parameters" is a command.
+
+**Alternatives.** (a) State in the README that the design is parameterised and
+leave it there. (b) Add the elaboration guards but run them only at the shipped
+size. (c) Go further: run the full stress tier at eight and sixteen tiles too.
+
+**Why.** (a) is what the design already did, and bug B22 is what it was worth.
+Two width literals sat under comments stating the exact requirement they
+violated, and every tier passed, because every tier ran at four tiles. A claim
+that is never executed is a claim that decays.
+
+(b) catches nothing. The guards are conditions on `NUM_TILES`; at the shipped
+size they are all false and nothing is elaborated. They only earn their keep
+when something re-elaborates the design at another size, which is what
+`lint-scale` is for. The two halves are one mechanism.
+
+(c) is the right answer and is not affordable here. The stress tier is thirty
+minutes at four tiles; at sixteen the state space is far larger and the runtime
+scales worse than linearly. Buying a weaker check that runs in nine seconds,
+and saying plainly what it does not cover, beats buying a stronger one that
+gets switched off.
+
+**Cost.** Precision, and it has to be said out loud rather than left to be
+assumed. `lint-scale` proves the design *elaborates* at sixteen tiles. It does
+not prove the protocol works there: the directory's head-of-line blocking
+(D13), the liveness bounds (D20, D24) and the one-VC-per-tile-pair ordering
+rule (D22) were all sized and measured at four tiles, and at least the first
+two would need re-measuring. `docs/verification.md` lists scaling under what is
+not verified, and that entry stays there.
+
+Nine seconds of lint is also nine seconds on every commit, which is the trade
+that makes this affordable at all: the check is cheap precisely because it
+stops at elaboration.

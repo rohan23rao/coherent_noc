@@ -1,0 +1,19 @@
+`verilator_config
+// Waivers that apply ONLY to the mesh-scaling lint pass (`make lint-scale`),
+// which elaborates the design at 8, 16 and 64 tiles to check that the
+// parameters are genuinely parameters.
+//
+// One entry, and it is about the lint rule rather than the design.
+//
+// WIDTHCONCAT fires on `rt_flit_i = '0;` in noc_top, the default assignment in
+// the always_comb that wires the mesh together. At 16 tiles that is 16 ports x
+// 5 x 141 bits = 11280 bits of `'0`, and Verilator's heuristic is that a
+// replication wider than 8k is probably a typo. Here it is not: default-assign
+// then override is the idiom that makes the per-port wiring below it readable
+// and guarantees every unconnected edge port reads zero, and it synthesises to
+// the same muxes either way. The rule has no threshold to raise, so the pass
+// waives it rather than rewriting correct code to satisfy a heuristic.
+//
+// At the shipped 2x2 the replication is 1410 bits and the rule does not fire,
+// which is why this waiver is not in the normal lint pass.
+lint_off -rule WIDTHCONCAT -file "*noc_top.sv"

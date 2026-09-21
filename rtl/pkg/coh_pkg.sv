@@ -85,10 +85,21 @@ package coh_pkg;
 
   // ack_cnt is SIGNED: Inv-Acks may arrive before the Data that carries the
   // AckCount, driving the count negative before it is credited back up.
-  // Range must hold -(NUM_TILES-1) .. +(NUM_TILES-1) with sign bit.
-  localparam int unsigned ACK_CNT_W    = 4;
+  // Range must hold -(NUM_TILES-1) .. +(NUM_TILES-1) with a sign bit, so the
+  // minimum width is $clog2(NUM_TILES) + 1. The same width is reused unsigned
+  // for binv_expect, which counts up to NUM_TILES recall responses, and
+  // $clog2(N)+1 covers that too for any power-of-two N.
+  //
+  // These were literals -- 4 and 3 -- with this comment above them and nothing
+  // enforcing it. At NUM_TILES=4 they were a bit generous; at 8 they fit
+  // exactly; at 16 the directory's `ack_count + 1` would have wrapped at 8 and
+  // the requester would have waited forever for acks it had already
+  // miscounted. Nothing in lint or in the table tests would have said so. See
+  // bug B22: a literal that happens to be right is a bug waiting for somebody
+  // to change a parameter.
+  localparam int unsigned ACK_CNT_W    = $clog2(NUM_TILES) + 1;
   // AckCount as carried in a head flit is unsigned, 0 .. NUM_TILES-1.
-  localparam int unsigned ACK_FIELD_W  = 3;
+  localparam int unsigned ACK_FIELD_W  = $clog2(NUM_TILES);
 
   //---------------------------------------------------------------------------
   // Network

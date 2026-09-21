@@ -56,8 +56,8 @@ are worth five minutes before `coh_pkg.sv`.
 Read these when you want to know *why* rather than *what*:
 
 - `docs/decisions.md` -- every non-obvious choice as decision, alternatives,
-  why, and cost. Twenty-six entries.
-- `docs/bug_log.md` -- twenty-one bugs, each with how it was localised and the
+  why, and cost. Twenty-seven entries.
+- `docs/bug_log.md` -- twenty-two bugs, each with how it was localised and the
   test that catches it now. The last six are the interesting ones; they are
   all races or ordering, and none of them were found by directed testing.
 - `docs/deadlock.md` -- the message dependency graph and why three virtual

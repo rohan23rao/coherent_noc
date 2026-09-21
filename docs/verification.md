@@ -325,10 +325,21 @@ coding discipline here, not a measurement.
 multi-corner timing, no place and route. `syn/README.md` lists what the flow
 deliberately does not attempt and why.
 
-**Scaling.** Everything is verified at four tiles on a 2x2 mesh with a
-four-entry MSHR file and a four-entry TBE file. The full sharer vector, the
-2-bit owner field and the XY router all have obvious limits beyond that, and
-none of them have been tested near those limits.
+**Scaling — the protocol, at any size other than four tiles.** `make
+lint-scale` elaborates the whole design at 4, 8, 16 and 64 tiles on every run
+of `make lint`, and five elaboration-time guards in `system_top` fail with the
+offending parameter named. That is a real check and it found a real defect
+(bug B22, two width literals that were correct at four tiles and silently wrong
+at sixteen), but it stops at elaboration. Nothing has ever *run* at another
+size.
+
+What that leaves unverified, concretely: the directory's head-of-line blocking
+(D13), the liveness bounds (D20, D24) and the one-channel-per-tile-pair
+ordering rule (D22) were all sized and measured at four tiles. The first two
+would need re-measuring at eight; the third stays correct at any size but its
+head-of-line cost grows. The full sharer vector is O(N) bits per L2 line, which
+is a storage decision rather than a correctness one, and past about 32 tiles it
+is the thing that forces a redesign rather than a parameter change.
 
 **The memory model's aliasing.** `mem_model` indexes with the low bits of the
 line address, so addresses further apart than `MEM_LINES` alias. An assertion

@@ -1079,3 +1079,96 @@ the flag is legitimately clear.
 lines per L2 set than the L2 has ways, which is the only configuration that
 back-invalidates continuously. The assertion above catches it thousands of
 cycles earlier than the value check does, and names the set and way.
+
+---
+
+## B22. Two width literals that were correct at four tiles and silently wrong at sixteen (Phase 15, RTL)
+
+**Symptom.** None. That is the point of this entry.
+
+The design passes every tier at its shipped configuration, and would have gone
+on passing. The defect is latent: it fires only when somebody changes
+`NUM_TILES`, which is exactly the thing the parameter exists to let them do.
+
+**How it was localized.** Not by a test. By a question -- "is this expandable
+to more cores?" -- and by answering it with an experiment instead of an
+opinion. The RTL was copied to a scratch tree, `NUM_TILES` / `MESH_X` /
+`MESH_Y` were rewritten, and each size was elaborated. Eight tiles on a 4x2
+mesh came back clean with no source changes at all; sixteen and sixty-four came
+back clean too, apart from one cosmetic lint advisory.
+
+Which was the wrong answer, and reading the package showed why:
+
+```systemverilog
+  // Range must hold -(NUM_TILES-1) .. +(NUM_TILES-1) with sign bit.
+  localparam int unsigned ACK_CNT_W    = 4;
+  // AckCount as carried in a head flit is unsigned, 0 .. NUM_TILES-1.
+  localparam int unsigned ACK_FIELD_W  = 3;
+```
+
+Two comments stating a requirement, and two literals that were not derived from
+it. The arithmetic is the whole story:
+
+| NUM_TILES | acks needed | `ACK_FIELD_W = 3` holds | verdict |
+| --- | --- | --- | --- |
+| 4 | 0..3 | 0..7 | one bit generous |
+| 8 | 0..7 | 0..7 | **fits exactly** |
+| 16 | 0..15 | 0..7 | **wraps, silently** |
+
+**Root cause.** A literal that happens to be right. At sixteen tiles the
+directory's `ack_count = ack_count + 1` wraps at eight, so a requester that
+should wait for nine Inv-Acks is told to wait for one. Its `ack_cnt` reaches
+zero with eight invalidations still in flight, it completes into M while other
+caches still hold the line readable, and SWMR is gone. The other order --
+acks first -- drives `ack_cnt` past the bottom of a 4-bit signed field instead,
+and the transaction never completes.
+
+Nothing would have reported it. Lint passes: the widths are self-consistent.
+The table tests pass: the protocol tables have no width in them. The first
+symptom would have been an MSHR liveness timeout thousands of cycles into a
+stress run at the new size, with a correct-looking table and a correct-looking
+directory.
+
+The deeper cause is that a comment was doing a parameter's job. `TILE_ID_W`,
+`BANK_W`, `L1_TAG_W` and every other width in the package are derived; these
+two were not, and the comment above them recorded the derivation in prose
+instead of in code.
+
+**Fix.** Derive them, and then check them.
+
+```systemverilog
+  localparam int unsigned ACK_CNT_W    = $clog2(NUM_TILES) + 1;
+  localparam int unsigned ACK_FIELD_W  = $clog2(NUM_TILES);
+```
+
+At four tiles that *narrows* both fields -- 4 to 3 and 3 to 2 -- so it is a
+real change to the design under test, not a no-op, and the whole suite and the
+mutation set were re-run for it. `head_payload_t` drops from 37 bits to 36,
+which the packet diagram picked up on the next `make diagrams` without anyone
+editing it.
+
+Deriving a width once is not the same as it staying derived, so `system_top`
+gained elaboration-time checks: generate blocks that instantiate a module which
+does not exist, named as sentences, so any tool that reads the file stops with
+the reason in the error text.
+
+```
+%Error-MODMISSING: Cannot find file containing module:
+  'ACK_FIELD_W_too_narrow_for_NUM_TILES_minus_1_invalidation_acks'
+```
+
+Five conditions are guarded this way: the two ack widths, `NUM_TILES ==
+MESH_X * MESH_Y`, `TILE_ID_W` wide enough to name every tile, `VCS_PER_VNET`
+at least two so `src_vc_id` can separate tiles at all, and `VC_DEPTH` large
+enough for a whole data packet.
+
+**Test that catches it now.** `make lint-scale`, which elaborates the design at
+4, 8, 16 and 64 tiles and is part of `make lint`. Verified the way every other
+check in this project was -- by putting the bug back. With the old literal in
+place it reports exactly the history: 4 and 8 tiles clean, 16 and 64 failing
+with the field named.
+
+What that check does **not** prove is worth stating in the same breath:
+elaborating at sixteen tiles says the design has sixteen tiles' worth of
+structure, not that the protocol still works at that size. The stress tier has
+never run at anything other than four. `docs/verification.md` says so.

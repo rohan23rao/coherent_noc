@@ -39,7 +39,7 @@ point-to-point ordering and this is where it comes from.
 Verification is six tiers -- unit, network, tables, directed, constrained
 random and mutation -- and a coverage report that lists every legal table cell
 the runs did not reach along with the argument for why it is unreachable. The
-bug log has twenty-one entries; the interesting ones are all in the last two
+bug log has twenty-two entries; the interesting ones are all in the last two
 tiers.
 
 ---

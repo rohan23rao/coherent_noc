@@ -139,4 +139,42 @@ module system_top
     .eject_credit_tail_i    (eje_cr_tail)
   );
 
+  //---------------------------------------------------------------------------
+  // Elaboration-time parameter checks.
+  //
+  // A package cannot hold procedural code, so these are generate blocks that
+  // instantiate a module which does not exist. When the condition is false
+  // nothing is elaborated and they cost nothing; when it is true, every tool
+  // that reads this file stops with the module name in the error message --
+  // lint, the second-opinion front end and the synthesis tool alike. That is
+  // why the names are sentences.
+  //
+  // They exist because of bug B22. ACK_FIELD_W was a literal that was correct
+  // at four tiles, correct by exactly one bit at eight, and silently wrong at
+  // sixteen -- where the directory's ack counter would wrap and a requester
+  // would wait forever for acks it had already miscounted. Nothing caught it:
+  // lint passed, the table tests passed, and the first symptom would have been
+  // a liveness timeout thousands of cycles into a run. A width is now derived
+  // AND checked, because deriving it correctly once is not the same as it
+  // staying correct.
+  //---------------------------------------------------------------------------
+  if (NUM_TILES != MESH_X * MESH_Y) begin : gen_chk_mesh
+    NUM_TILES_must_equal_MESH_X_times_MESH_Y u_check ();
+  end
+  if (ACK_FIELD_W < $clog2(NUM_TILES)) begin : gen_chk_ack_field
+    ACK_FIELD_W_too_narrow_for_NUM_TILES_minus_1_invalidation_acks u_check ();
+  end
+  if (ACK_CNT_W < $clog2(NUM_TILES) + 1) begin : gen_chk_ack_cnt
+    ACK_CNT_W_too_narrow_for_signed_plus_or_minus_NUM_TILES_minus_1 u_check ();
+  end
+  if (TILE_ID_W < $clog2(NUM_TILES)) begin : gen_chk_tile_id
+    TILE_ID_W_too_narrow_to_name_every_tile u_check ();
+  end
+  if (VCS_PER_VNET < 2) begin : gen_chk_vcs
+    VCS_PER_VNET_must_be_at_least_2_for_src_vc_id_to_separate_tiles u_check ();
+  end
+  if (VC_DEPTH < 1 + FLITS_PER_LINE) begin : gen_chk_vc_depth
+    VC_DEPTH_must_hold_a_whole_data_packet_head_plus_FLITS_PER_LINE u_check ();
+  end
+
 endmodule : system_top

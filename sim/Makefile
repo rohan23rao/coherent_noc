@@ -61,7 +61,7 @@ WAIVERS := $(ROOT)/lint/waivers.vlt
 # they are not global.
 WAIVERS_PERFILE := $(ROOT)/lint/waivers_perfile.vlt
 
-.PHONY: all lint lint-rtl lint-style lint-libs lint-slang lint-synth lint-synth-bb test waves mutate diagrams diagrams-check print-rtl-srcs clean help
+.PHONY: all lint lint-rtl lint-style lint-libs lint-slang lint-synth lint-synth-bb lint-scale test waves mutate diagrams diagrams-check print-rtl-srcs clean help
 
 all: lint test
 
@@ -69,7 +69,7 @@ all: lint test
 # Lint: Verilator -Wall with zero warnings, plus the structural checks Verilator
 # does not perform. Both must pass.
 #------------------------------------------------------------------------------
-lint: lint-style lint-rtl lint-libs lint-synth lint-synth-bb lint-slang
+lint: lint-style lint-rtl lint-libs lint-scale lint-synth lint-synth-bb lint-slang
 
 lint-rtl:
 	@echo "== verilator --lint-only -Wall =="
@@ -106,6 +106,13 @@ lint-synth-bb:
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) -DSYNTHESIS \
 	  $(WAIVERS) $(WAIVERS_SYNTH) $(WAIVERS_BB) $(RTL_SRCS_BB)
 	@echo "lint-synth-bb: clean"
+
+# Elaborate at mesh sizes other than the shipped one. See the script's header
+# for what this does and does not prove; the short version is that it checks
+# the parameters are parameters, not that the protocol still works at 64 tiles.
+lint-scale:
+	@echo "== verilator -Wall at other mesh sizes =="
+	@$(SCRIPTS)/check_scale.sh $(VERILATOR) $(RTL_DIR) $(ROOT)/lint "$(RTL_SRCS)"
 
 lint-style:
 	@echo "== structural style checks =="
@@ -243,4 +250,5 @@ help:
 	@echo "make diagrams-check       fail if a committed figure is stale"
 	@echo "make lint-synth           elaborate with SYNTHESIS defined, as DC sees it"
 	@echo "make lint-synth-bb        the same, with the syn/ black boxes substituted"
+	@echo "make lint-scale           elaborate at 8, 16 and 64 tiles"
 	@echo "make all                  lint + test"
