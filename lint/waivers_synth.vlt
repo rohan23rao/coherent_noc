@@ -1,0 +1,39 @@
+`verilator_config
+// Waivers that apply ONLY to the synthesis-mode lint pass (`make lint-synth`),
+// which elaborates the design with `SYNTHESIS` defined -- that is, with every
+// SVA block and every debug `$display` compiled out.
+//
+// The point of that pass is to elaborate the design as Design Compiler will
+// see it, so that "it simulates but will not synthesise" is found here rather
+// than on a machine this repository cannot run on. What it must NOT do is go
+// quiet: the four entries below are exactly the signals and parameters whose
+// only consumer is an assertion, so their disappearance under `SYNTHESIS` is
+// the expected result and not a finding. Anything else that this pass reports
+// is a real problem with the design.
+//
+// Each entry names the assertion that consumes it. If an assertion is deleted,
+// its waiver should go with it and the now-genuinely-dead signal should be
+// deleted too.
+
+// mshr_file: TIMEOUT parameterises a_mshr_liveness, the cache-side deadlock
+// detector. See bug B18 for why the bound is a parameter rather than a
+// constant.
+lint_off -rule UNUSEDPARAM -file "*mshr_file.sv" -match "*TIMEOUT*"
+
+// tbe_file: TIMEOUT parameterises a_tbe_liveness, the directory-side one.
+lint_off -rule UNUSEDPARAM -file "*tbe_file.sv" -match "*TIMEOUT*"
+
+// coh_pkg: AGE_W is the width of the age counters that only the two liveness
+// assertions above read.
+lint_off -rule UNUSEDPARAM -file "*coh_pkg.sv" -match "*AGE_W*"
+
+// input_unit: buf_wr_ready is read only by a_no_overflow, which says a flit is
+// never written to a full VC buffer. The credit protocol makes that
+// impossible, so the signal has no functional consumer by design.
+lint_off -rule UNUSEDSIGNAL -file "*input_unit.sv" -match "*buf_wr_ready*"
+
+// mem_model: the behavioural memory ignores the upper address bits because it
+// is smaller than the address space. It is not synthesised -- the synthesis
+// flow replaces it with syn/blackbox/mem_model.sv -- but it is still elaborated
+// by this pass, which lints the whole design as written.
+lint_off -rule UNUSEDSIGNAL -file "*mem_model.sv" -match "*req_addr_i*"

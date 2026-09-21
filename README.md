@@ -14,6 +14,7 @@ make mutate   # break each protocol arc, require its test to notice
 make all      # lint + test, and what a clean clone must pass
 make waves TEST=<name>
 make diagrams # regenerate docs/img and the state machines
+make -C syn router PDK=saed32   # Design Compiler, if you have one -- see syn/README.md
 ```
 
 ## The design in three pictures
@@ -62,6 +63,7 @@ actually like to get this right.
 | `docs/verification.md` | the six tiers, the coverage report, and an honest list of what is not verified |
 | `docs/noc_perf.md` | load-latency curves, the knee, and what the ordering rule cost |
 | `docs/diagrams.md` | every figure, each stating an argument rather than labelling boxes |
+| `syn/README.md` | the Design Compiler flow, what it deliberately does not do, and what to send back |
 | `docs/interview_notes.md` | ten hard questions with answers |
 
 ## Current state
@@ -78,6 +80,11 @@ Every phase gate passes:
 - Functional coverage has an empty list of uncovered *reachable* bins. The
   bins that are unreachable are listed with a written argument each rather
   than excluded.
+- The design elaborates clean with `SYNTHESIS` defined, and again with the
+  synthesis black boxes substituted -- both are part of `make lint`. The
+  Design Compiler flow in `syn/` is written and argued but has **not** been
+  run; `syn/README.md` says so in its first paragraph and says what to send
+  back from a machine that can.
 
 ## Requirements
 

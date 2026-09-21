@@ -1,0 +1,19 @@
+`verilator_config
+// Waivers for the black-box substitution pass (`make lint-synth-bb`), which
+// elaborates the design with syn/blackbox/*.sv in place of the behavioural
+// array and the behavioural memory -- the exact source set Design Compiler
+// reads.
+//
+// A black box is by definition a module whose ports go nowhere, so UNUSEDSIGNAL,
+// UNDRIVEN and UNUSEDPARAM on those two files are not findings. They are
+// waived by FILE, so the waiver cannot leak into the real design.
+//
+// What this pass is actually for: a stub's port list drifting from the module
+// it stands in for is a PORT-NOT-FOUND error, not a warning, and no waiver
+// here suppresses it. That is the failure this check exists to catch, and it is
+// the one that would otherwise show up as a dc_shell error on a machine this
+// repository cannot run on.
+
+lint_off -rule UNUSEDSIGNAL -file "*syn/blackbox/*"
+lint_off -rule UNDRIVEN     -file "*syn/blackbox/*"
+lint_off -rule UNUSEDPARAM  -file "*syn/blackbox/*"

@@ -876,3 +876,88 @@ nothing else would have caught.
 validated where they belong -- in the directed tiers, which inject no long
 holds and report their own margins: race R12 measures 315 cycles against the
 1000-cycle MSHR bound and 212 against the 500-cycle TBE bound.
+
+---
+
+## D25. The arrays are black boxes in synthesis, and the flow says so in every report
+
+**Decision.** `make -C syn <block>` substitutes an empty `sram_1rw` for the
+behavioural one, and `syn/constraints/common.sdc` budgets half the clock period
+on each side of every black box so that the logic computing the address and the
+logic consuming the read data both stay timed. `SRAM=flops` synthesises the
+behavioural array instead.
+
+**Alternatives.** (a) Synthesise the behavioural array always, and report the
+resulting flop-based area. (b) Leave the arrays out of the file list entirely
+and let DC's unresolved-reference black box happen implicitly. (c) Write a
+`.lib` for a plausible SRAM by hand so the boundary is timed properly.
+
+**Why.** (a) answers a question nobody asked. The behavioural model is
+`logic [W-1:0] mem_q [D]`, which maps to flip-flops: about 170 kbit per tile
+and 680 kbit for the system. No one builds a cache out of standard-cell flops,
+so that area number is not a design fact, it is an artefact of the model. The
+area that means something is the control logic's, and the arrays' area and
+access time come from a memory compiler this project does not have.
+
+(b) gets the same netlist but silently. An implicit black box has no timing
+arcs, so every path into and out of it is unconstrained — and an unconstrained
+path is worse than a violating one, because a violating path is in the report
+and an unconstrained path is not. The explicit stub plus the `set_max_delay`
+budget is what makes those paths appear at all.
+
+(c) is the right answer and is dishonest without the data. A hand-written
+`.lib` with invented setup and access times would produce a timing report that
+*looks* signed off. Better to state the gap than to paper over it with numbers
+that have nothing behind them.
+
+**Cost.** The flow cannot report the array access time, which for a cache is a
+large part of the story — and it is exactly the number a reviewer will ask for.
+The honest answer is "black-boxed, here is the control-logic path, the array
+number needs a memory compiler", and `syn/README.md` says that in the section
+on what to send back. `SRAM=flops` exists because one array, the 64 × 2 × 21-bit
+L1 tag array, genuinely *is* small enough to be flops in a real design, so its
+flop-based number is a real number.
+
+---
+
+## D26. Synthesis collateral is written and checked here, but run elsewhere
+
+**Decision.** `syn/` is a complete Design Compiler flow — PDK-agnostic setup,
+one script, per-block SDC with the budget for each port class argued in
+comments — and it has never been executed. Instead, two lint passes
+(`make lint-synth`, `make lint-synth-bb`) reproduce as much of DC's front end
+as Verilator can, and `syn/README.md` opens by saying the Tcl is unrun.
+
+**Alternatives.** (a) Do not write the flow at all, and say synthesis is out of
+scope. (b) Write it and claim it works. (c) Write a generic flow and let the
+person with the tools work out the block list, the parameters and the
+constraints.
+
+**Why.** (a) leaves a real question unanswered: a coherence controller that has
+never been near a synthesis tool has an unknown critical path, and "it is
+synthesizable SystemVerilog" is a claim about style, not about timing. (b) is
+the one option that is actually wrong — an unrun script presented as a working
+flow is a claim that will be checked in about ninety seconds by anyone with a
+licence.
+
+(c) is the tempting one and it is what most repositories do. The reason not to:
+the interesting content of a synthesis setup is not `compile_ultra`, it is the
+constraints. Which ports have a known neighbour and which do not; that the
+router's links are register-to-register at both ends and should not carry a
+blanket 40% budget; that `core_req_ready_o` is combinational and this is where
+that decision becomes a number. Writing those down is work that can be done
+without a licence, and it is the part that would otherwise never get done.
+
+**Cost.** The first run will fail on something — most likely a library path
+that does not match the kit's layout, or a `set_driving_cell` name spelled
+differently. The flow is organised so that the fix is in one file
+(`syn/setup/pdk.tcl`), and that is said plainly at the top of `syn/README.md`
+rather than discovered.
+
+What the two lint passes do and do not buy is worth being precise about. They
+catch: a construct that only elaborates because an assertion referenced it, a
+`$display` outside its guard, and a black-box stub whose port list has drifted
+from the module it stands in for — that last one is a hard `PINNOTFOUND` error
+and is the failure this arrangement is most likely to prevent. They do not
+catch: anything about inference, timing, or DC's own dislikes. Verilator is not
+Design Compiler, and the README does not pretend otherwise.

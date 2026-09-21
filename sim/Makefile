@@ -61,7 +61,7 @@ WAIVERS := $(ROOT)/lint/waivers.vlt
 # they are not global.
 WAIVERS_PERFILE := $(ROOT)/lint/waivers_perfile.vlt
 
-.PHONY: all lint lint-rtl lint-style lint-libs lint-slang test waves mutate diagrams clean help
+.PHONY: all lint lint-rtl lint-style lint-libs lint-slang lint-synth lint-synth-bb test waves mutate diagrams print-rtl-srcs clean help
 
 all: lint test
 
@@ -69,12 +69,43 @@ all: lint test
 # Lint: Verilator -Wall with zero warnings, plus the structural checks Verilator
 # does not perform. Both must pass.
 #------------------------------------------------------------------------------
-lint: lint-style lint-rtl lint-libs lint-slang
+lint: lint-style lint-rtl lint-libs lint-synth lint-synth-bb lint-slang
 
 lint-rtl:
 	@echo "== verilator --lint-only -Wall =="
 	$(VERILATOR) $(VERILATOR_LINT_FLAGS) $(WAIVERS) $(RTL_SRCS)
 	@echo "lint: clean"
+
+# Elaborate the design exactly as Design Compiler will see it: `SYNTHESIS`
+# defined, so every SVA block and every debug $display is compiled out. A
+# design that lints clean in simulation mode and not in this one is a design
+# that is about to fail on a machine this repository cannot run on.
+# lint/waivers_synth.vlt lists the four signals whose only consumer is an
+# assertion, with the assertion named; everything else this pass reports is
+# real. See syn/README.md.
+WAIVERS_SYNTH := $(ROOT)/lint/waivers_synth.vlt
+
+lint-synth:
+	@echo "== verilator --lint-only -Wall -DSYNTHESIS =="
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) -DSYNTHESIS \
+	  $(WAIVERS) $(WAIVERS_SYNTH) $(RTL_SRCS)
+	@echo "lint-synth: clean"
+
+# The same design again, with syn/blackbox/*.sv substituted for the behavioural
+# array and the behavioural memory -- the exact source set dc_shell reads. Its
+# job is to catch a stub whose port list has drifted from the module it stands
+# in for, which is a hard error here and a dc_shell error two minutes into a run
+# on a machine this repository cannot log into.
+WAIVERS_BB := $(ROOT)/lint/waivers_blackbox.vlt
+SYN_DIR    := $(ROOT)/syn
+RTL_SRCS_BB := $(patsubst $(RTL_DIR)/mem/mem_model.sv,$(SYN_DIR)/blackbox/mem_model.sv,\
+                 $(patsubst $(RTL_DIR)/lib/sram_1rw.sv,$(SYN_DIR)/blackbox/sram_1rw.sv,$(RTL_SRCS)))
+
+lint-synth-bb:
+	@echo "== verilator --lint-only -Wall -DSYNTHESIS, black boxes substituted =="
+	$(VERILATOR) $(VERILATOR_LINT_FLAGS) -DSYNTHESIS \
+	  $(WAIVERS) $(WAIVERS_SYNTH) $(WAIVERS_BB) $(RTL_SRCS_BB)
+	@echo "lint-synth-bb: clean"
 
 lint-style:
 	@echo "== structural style checks =="
@@ -165,6 +196,11 @@ mutate:
 	@$(PYTHON) $(SCRIPTS)/mutate.py \
 	  $(if $(MUT),--only $(MUT),) $(if $(RACE),--race $(RACE),)
 
+# The synthesis flow reads the file list from here rather than keeping its own,
+# so the two cannot drift. One source of truth for "what the design is".
+print-rtl-srcs:
+	@for f in $(RTL_SRCS); do echo $$f; done
+
 #------------------------------------------------------------------------------
 # Diagrams. The SVGs are generated; the state machines are rendered from the
 # same table the RTL is checked against, so a wrong one cannot be produced.
@@ -187,4 +223,6 @@ help:
 	@echo "make waves TEST=<name>    run <name> and keep the waveform"
 	@echo "make mutate               run the mutation set"
 	@echo "make diagrams             regenerate docs/img and the state machines"
+	@echo "make lint-synth           elaborate with SYNTHESIS defined, as DC sees it"
+	@echo "make lint-synth-bb        the same, with the syn/ black boxes substituted"
 	@echo "make all                  lint + test"

@@ -19,3 +19,12 @@ __pycache__/
 *.log
 .vscode/
 .idea/
+
+# Synthesis outputs and the file list that syn/Makefile regenerates from
+# sim/Makefile on every run. Checking either in would let them drift from the
+# design they came from.
+syn/out/
+syn/filelist.f
+syn/command.log
+syn/default.svf
+syn/*.log
