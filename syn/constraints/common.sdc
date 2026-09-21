@@ -10,6 +10,59 @@
 # syn/setup/pdk.tcl. Nothing here names a technology.
 #==============================================================================
 
+
+#------------------------------------------------------------------------------
+# Helpers, and the reason they exist.
+#
+# A block SDC that overrides the default budget for a class of ports is making
+# a claim about what is on the other side of them. If its pattern matches
+# nothing -- a renamed port, a typo -- the claim is silently replaced by the
+# conservative default and nobody ever finds out: the design still times, just
+# against a budget that was never intended. So a required override that matches
+# nothing is an error.
+#
+# The _opt forms exist for patterns that are legitimately absent on some blocks
+# (`dbg_*` on the router, `hold_*` below tile level). They say "if this exists,
+# constrain it this way", which is a different and weaker claim, deliberately.
+#
+# `make -C syn dryrun` exercises every one of these against the block's real
+# port list, with no tool and no licence -- see syn/scripts/dryrun.tcl.
+#------------------------------------------------------------------------------
+proc sdc_where {} {
+  return [expr {[info exists ::TOP] ? $::TOP : "this block"}]
+}
+
+proc sdc_in {pattern delay} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] == 0} {
+    error "SDC: input pattern '$pattern' matched no port on [sdc_where]"
+  }
+  set_input_delay $delay -clock clk $p
+}
+proc sdc_out {pattern delay} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] == 0} {
+    error "SDC: output pattern '$pattern' matched no port on [sdc_where]"
+  }
+  set_output_delay $delay -clock clk $p
+}
+proc sdc_in_opt {pattern delay} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] > 0} { set_input_delay $delay -clock clk $p }
+}
+proc sdc_out_opt {pattern delay} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] > 0} { set_output_delay $delay -clock clk $p }
+}
+proc sdc_false_from_opt {pattern} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] > 0} { set_false_path -from $p }
+}
+proc sdc_false_to_opt {pattern} {
+  set p [get_ports $pattern -quiet]
+  if {[sizeof_collection $p] > 0} { set_false_path -to $p }
+}
+
 set CLK_PORT clk
 
 create_clock -name clk -period $PERIOD [get_ports $CLK_PORT]

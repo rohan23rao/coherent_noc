@@ -2,14 +2,17 @@
 
 A Design Compiler flow for this design, PDK-agnostic, driven from one Makefile.
 
-**Read this first: nothing in this directory has been run.** The machine this
-repository was developed on has no Synopsys tools and no PDK. The RTL is
-checked under `SYNTHESIS` here — see [What *has* been
-checked](#what-has-been-checked) — but the Tcl has never been executed by
-`dc_shell`. Expect to fix something on the first run. The two most likely
-things are a library path that does not match your kit's layout
-(`syn/setup/pdk.tcl`, and it is the only file that should need editing) and a
-cell name for `set_driving_cell` that your library spells differently.
+**Read this first: `dc_shell` has never run this.** The machine this repository
+was developed on has no Synopsys tools and no PDK. What *has* run, on every
+commit, is the whole flow with the tool stubbed out — `make -C syn dryrun`
+executes `synth.tcl` and every SDC against the blocks' real port lists, so the
+scripts' own logic is checked even though the tool's is not. See [What has been
+checked](#what-has-been-checked).
+
+Expect to fix something on the first real run. The two most likely things are a
+library path that does not match your kit's layout (`syn/setup/pdk.tcl`, and it
+is the only file that should need editing) and a cell name for
+`set_driving_cell` that your library spells differently.
 
 ---
 
@@ -109,6 +112,19 @@ a memory controller, and it is not part of the design.
 The Tcl has not run. These have, and they are in `make lint`, so they run on
 every commit:
 
+* **`make -C syn dryrun`** — the whole flow, with every Design Compiler
+  command replaced by a no-op that records what was called. That is enough to
+  execute everything in `synth.tcl` and the SDC files that is *this
+  repository's* logic rather than the tool's: every variable resolves in every
+  branch, the file-list substitution puts the black boxes in and leaves
+  everything else alone, the per-block elaboration parameters are found, the
+  right SDC is selected, and — the part that matters — every `get_ports`
+  pattern is matched against the block's real port list, extracted from the
+  elaborated RTL by `scripts/ports.py`. Two things fail it: a required pattern
+  that matches nothing (a renamed port or a typo, which on the real tool
+  silently falls back to the conservative default and is never noticed), and
+  any port left with neither a delay nor a false path. Both were verified by
+  breaking them on purpose.
 * **`make lint-synth`** — Verilator elaborates the whole design with
   `SYNTHESIS` defined, which is exactly the source DC reads: every SVA block
   and every debug `$display` compiled out. Four signals exist only to feed an
@@ -123,6 +139,8 @@ every commit:
 * **`scripts/check_style.sh`** — no `initial`, no `#delay`, no `force`/
   `release` anywhere under `rtl/`; every `always_ff` uses the same
   asynchronous reset or is explicitly annotated as unreset.
+* **The Tcl parses.** `info complete` on every script and SDC, which is weak
+  on its own and is why the dry run above exists.
 * **The file list is not duplicated.** `syn/Makefile` pulls it from
   `sim/Makefile` on every run, so what is synthesised is by construction what
   is simulated.

@@ -924,9 +924,11 @@ flop-based number is a real number.
 
 **Decision.** `syn/` is a complete Design Compiler flow — PDK-agnostic setup,
 one script, per-block SDC with the budget for each port class argued in
-comments — and it has never been executed. Instead, two lint passes
-(`make lint-synth`, `make lint-synth-bb`) reproduce as much of DC's front end
-as Verilator can, and `syn/README.md` opens by saying the Tcl is unrun.
+comments — and `dc_shell` has never executed it. Instead three checks run on
+every commit: two lint passes (`make lint-synth`, `make lint-synth-bb`) that
+reproduce as much of DC's front end as Verilator can, and a dry run
+(`make -C syn dryrun`) that executes the flow itself against stubbed tool
+commands. `syn/README.md` opens by saying the tool has not run it.
 
 **Alternatives.** (a) Do not write the flow at all, and say synthesis is out of
 scope. (b) Write it and claim it works. (c) Write a generic flow and let the
@@ -954,10 +956,22 @@ differently. The flow is organised so that the fix is in one file
 (`syn/setup/pdk.tcl`), and that is said plainly at the top of `syn/README.md`
 rather than discovered.
 
-What the two lint passes do and do not buy is worth being precise about. They
-catch: a construct that only elaborates because an assertion referenced it, a
-`$display` outside its guard, and a black-box stub whose port list has drifted
-from the module it stands in for — that last one is a hard `PINNOTFOUND` error
-and is the failure this arrangement is most likely to prevent. They do not
-catch: anything about inference, timing, or DC's own dislikes. Verilator is not
-Design Compiler, and the README does not pretend otherwise.
+What the three checks do and do not buy is worth being precise about. They
+catch: a construct that only elaborates because an assertion referenced it; a
+`$display` outside its guard; a black-box stub whose port list has drifted from
+the module it stands in for, which is a hard `PINNOTFOUND` error; an unresolved
+variable or a dead branch anywhere in the flow; a constraint aimed at a port
+that does not exist; and a port left with neither a delay nor a false path.
+
+That last pair is the one worth dwelling on, because it is the failure mode a
+synthesis setup is most likely to have and least likely to report. A `get_ports`
+pattern that matches nothing does not fail on the real tool — it quietly leaves
+those ports on whatever the default budget was, and the design still times,
+against constraints nobody intended. Making a required override that matches
+nothing an error, and then checking every override against the elaborated port
+list, converts that from invisible to loud. Both were verified by breaking them
+on purpose and watching the dry run fail.
+
+They do not catch anything about inference, timing, or Design Compiler's own
+dislikes. Verilator is not Design Compiler and a stub is not a tool, and
+neither the README nor this entry pretends otherwise.
