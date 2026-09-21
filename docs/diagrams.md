@@ -289,6 +289,21 @@ localised it.
 
 ---
 
+## 6. Verification
+
+![verification tiers](img/verification.svg)
+
+Six tiers, and for each one a column for what it proves and a column for what
+it cannot. The second column is the one that decided what the next tier had to
+be — tier 2 passing throughout the life of bug B19 is not a footnote, it is the
+reason tier 5 exists.
+
+Note the loop at the left: tier 6's subject is the tests, not the design.
+`docs/verification.md` has the full version, including the coverage lists and
+an honest account of what is not verified at all.
+
+---
+
 ## Regenerating
 
 ```sh

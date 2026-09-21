@@ -209,6 +209,7 @@ diagrams:
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_system.py
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_uarch.py
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_proto.py
+	@$(PYTHON) $(SCRIPTS)/diagrams/gen_verif.py
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_fsm.py
 
 clean:

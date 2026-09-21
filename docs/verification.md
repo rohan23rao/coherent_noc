@@ -11,6 +11,8 @@ plan that does not say what it leaves out is a marketing document.
 
 ## The tiers
 
+![the six tiers](img/verification.svg)
+
 ### 1. Unit
 
 `tb/tests/test_unit_*.py`. One module each: the round-robin arbiter, the FIFO,
