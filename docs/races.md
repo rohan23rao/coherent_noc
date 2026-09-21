@@ -61,6 +61,18 @@ Twelve mutations, twelve killed. R10 has no mutation on purpose; the reason is
 in its entry, and inventing an arc for it would be claiming coverage that does
 not exist.
 
+Three more mutations are not races at all. They are the invariants the
+constrained-random tier found -- nobody thought of them in advance, which is
+the point -- and each is paired with the stress configuration that found it:
+
+| # | Invariant | Test | Mutation | Result |
+| --- | --- | --- | --- | --- |
+| B19 | a packet keeps its virtual channel, so messages between one pair of tiles cannot be reordered | `test_stress_16_lines` | `b19-lowest-free-vc` | KILLED |
+| B20 | the core pipeline yields to the forward and response paths on a line they are acting on | `test_stress_racing_same_line` | `b20-s1-ignores-coherence-paths` | KILLED |
+| B21 | a clean PutE restores the L2's "my copy is current" flag | `test_stress_l2_capacity_pressure` | `b21-pute-leaves-l2-stale` | KILLED |
+
+Fifteen mutations, fifteen killed.
+
 ---
 
 ## R1 -- Early Inv-Ack
