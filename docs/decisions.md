@@ -170,6 +170,26 @@ for the whole build. It must be deleted at the Phase 12 gate: if the design is
 complete and the waiver is still needed, the parameters it covers are dead and
 should be removed instead. That check is an explicit Phase 12 item, not a hope.
 
+**Outcome at the Phase 12 gate.** The check paid for itself. Removing the
+waiver turned up three parameters with no consumer anywhere -- `MEM_TILE_ID`,
+`VC_PTR_W` and `SINK_BOUND` -- and all three are now deleted. `MEM_TILE_ID`
+was the interesting one: it was dead because the implementation gives every
+tile its own memory rather than routing fills to one controller, which is a
+real deviation from the specification that nobody had written down until the
+dead parameter pointed at it (see `docs/spec.md`, deviation 1).
+
+The waiver did not disappear, though; it moved. A leaf module elaborated on its
+own reads a handful of the package's parameters and no more, so in the
+per-module lint pass every other parameter looks dead -- an artefact of the cut,
+not a property of the design. That pass, and the testbench builds, which
+elaborate subsets too, now take `lint/waivers_perfile.vlt`. The design-level
+pass takes only `lint/waivers.vlt` and has no `UNUSEDPARAM` waiver at all,
+which is where "this parameter has no consumer" is a real finding.
+
+Splitting them is the part worth keeping: a waiver that is correct for one
+elaboration and wrong for another should be scoped to the elaboration it is
+correct for, not granted globally because it is inconvenient twice.
+
 ---
 
 ## D8. The FIFO refuses a write while full even when a read drains a slot
@@ -763,11 +783,18 @@ each XY-routed, and XY routing is deadlock-free with a single buffer class. The
 virtual networks still break the protocol-level dependency cycle; the VC index
 now breaks nothing and orders everything.
 
-**Cost.** Channel utilisation. A packet that finds its channel busy waits,
-where before it could take the other one. Under the stress tier's hot-spot
-traffic the measured effect was a few percent on completion time, and the
-alternative was a protocol that silently loses a transaction roughly once in
-ten thousand requests.
+**Cost, measured.** Channel utilisation. A packet that finds its channel busy
+waits, where before it could take the other one. Re-running the mesh
+load-latency sweep before and after gives **10-15% mean latency below the
+knee** -- 8.2 to 9.2 cycles at 0.25 offered load, 8.7 to 10.1 at 0.40 -- and
+**no change at saturation**: accepted throughput is 0.601 flits/cycle/node
+against 0.604 before, because the limit there is the ejection port and the
+allocator, neither of which this rule touches. The full table is in
+`docs/noc_perf.md`.
+
+The alternative was a protocol that loses a transaction whenever a Put-Ack
+overtakes a forward, which the stress tier hit roughly once in ten thousand
+requests. Not a close call -- but worth being able to say what was paid.
 
 ---
 

@@ -24,16 +24,16 @@ hide the queue growth that defines the knee.
 
 | Offered | Accepted | Mean latency (cycles) |
 | ---: | ---: | ---: |
-| 0.02 | 0.020 | 8.0 |
-| 0.05 | 0.050 | 7.9 |
-| 0.10 | 0.101 | 8.0 |
-| 0.15 | 0.154 | 8.1 |
-| 0.20 | 0.201 | 8.2 |
-| 0.25 | 0.248 | 8.2 |
-| 0.30 | 0.297 | 8.4 |
-| 0.40 | 0.396 | 8.7 |
-| 0.50 | 0.499 | 10.5 |
-| 0.70 | 0.604 | 155.5 |
+| 0.02 | 0.020 | 8.1 |
+| 0.05 | 0.050 | 8.1 |
+| 0.10 | 0.101 | 8.4 |
+| 0.15 | 0.154 | 8.7 |
+| 0.20 | 0.201 | 8.8 |
+| 0.25 | 0.247 | 9.2 |
+| 0.30 | 0.297 | 9.4 |
+| 0.40 | 0.395 | 10.1 |
+| 0.50 | 0.497 | 11.9 |
+| 0.70 | 0.601 | 157.0 |
 
 ```
 latency
@@ -51,14 +51,41 @@ latency
       0.02 .05 .10 .15 .20 .25 .30  .40   .50   .70
 ```
 
-**Zero-load latency: 8.0 cycles.** Three router stages plus a link per hop, at
+**Zero-load latency: 8.1 cycles.** Three router stages plus a link per hop, at
 a mean of 1.333 hops, is about 5.3 cycles of pure traversal; the balance is the
 injection handshake and the source queue.
 
 **Saturation: accepted throughput flattens at about 0.60 flits/cycle/node.**
-Between 0.50 and 0.70 offered, accepted rises only 0.499 -> 0.604 while mean
-latency goes 10.5 -> 155.5. That is the knee, and 0.60 is the number worth
+Between 0.50 and 0.70 offered, accepted rises only 0.497 -> 0.601 while mean
+latency goes 11.9 -> 157.0. That is the knee, and 0.60 is the number worth
 quoting.
+
+### What the ordering rule cost
+
+These numbers were re-measured after decision D22, which stops a packet
+changing virtual channel mid-flight so that messages between one pair of tiles
+cannot be reordered. A packet that finds its own channel busy now waits instead
+of taking the other one, so some cost was expected. Against the same test at
+the same seeds, before and after:
+
+| Offered | Latency before | Latency after | Change |
+| ---: | ---: | ---: | ---: |
+| 0.10 | 8.0 | 8.4 | +5% |
+| 0.25 | 8.2 | 9.2 | +12% |
+| 0.40 | 8.7 | 10.1 | +16% |
+| 0.50 | 10.5 | 11.9 | +13% |
+
+**The knee did not move.** Accepted throughput at saturation is 0.601 against
+0.604 before -- within noise -- because the limit there is the ejection port and
+the allocator, neither of which this rule touches. What it costs is latency
+under moderate load, where a packet that would have slipped onto the other
+channel now queues behind its own.
+
+That is the trade, stated as a number: **roughly 10-15% mean latency below the
+knee, for point-to-point ordering.** The alternative was a protocol that loses
+a transaction whenever a Put-Ack overtakes a forward, which the stress tier
+measured at roughly once in ten thousand requests. It is not a close call, but
+it is worth being able to say what was paid.
 
 **Why 0.60 and not 1.0.** The ejection port is the theoretical limit: by
 symmetry each node receives as much as it sends, and an eject port moves one
