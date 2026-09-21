@@ -2,8 +2,26 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from svg import Svg, VNET, INK, MUTED, RULE, ROLE
+import params
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "img")
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+OUT = os.path.join(ROOT, "docs", "img")
+sys.path.insert(0, os.path.join(ROOT, "tb"))
+from models import tables as T  # noqa: E402
+
+# Every number in these figures comes from the design, not from memory: the
+# sizes from coh_pkg.sv, the state counts from the protocol table the RTL is
+# checked against and from the directory controller's own enum.
+P = params.load()
+L1_STATES = len(T.STATE_NAMES)
+DIR_STATES = len(T.DIR_STATE_NAMES)
+DIR_FSM_STATES = params.fsm_state_count(
+    os.path.join(ROOT, "rtl", "l2", "dir_ctrl.sv"), "dir_fsm_e")
+
+
+def kb(sets, ways):
+    b = sets * ways * P.LINE_BYTES
+    return f"{b // 1024} KB" if b % 1024 == 0 else f"{b} B"
 
 V0, V1, V2 = VNET[0][0], VNET[1][0], VNET[2][0]
 
@@ -32,15 +50,19 @@ def tile(path):
     # ---- L1 agent -----------------------------------------------------------
     s.group_box(40, 158, 520, 296, "L1 agent  —  requester", role="control")
     s.block(64, 190, 220, 60, "l1_cache", role="control", size=13,
-            sub=("3-stage pipeline, PIPT", "4 KB, 64 sets x 2 ways"))
+            sub=("3-stage pipeline, PIPT",
+                 f"{kb(P.L1_SETS, P.L1_WAYS)}, {P.L1_SETS} sets x "
+                 f"{P.L1_WAYS} ways"))
     s.block(304, 190, 232, 60, "mshr_file", role="storage", size=13,
-            sub=("4 entries, CAM on line addr", "signed ack_cnt"))
+            sub=(f"{P.MSHR_ENTRIES} entries, CAM on line addr",
+                 "signed ack_cnt"))
     s.block(64, 266, 220, 46, "tag + state array", role="storage", size=12,
             sub=("the state, transient included",))
     s.block(304, 266, 232, 46, "data array", role="storage", size=12,
-            sub=("2 x 32 B per set",))
+            sub=(f"{P.L1_WAYS} x {P.LINE_BYTES} B per set",))
     s.block(64, 328, 472, 44, "l1_coh_fsm", role="datapath", size=12,
-            sub=("pure function (state, event) -> next state + actions, 13 states",))
+            sub=("pure function (state, event) -> next state + actions, "
+                 f"{L1_STATES} states",))
     s.text(300, 394, "issues on VN0 · accepts VN1 and VN2 · answers on VN2",
            size=11, fill=MUTED, mono=False)
     s.text(300, 412, "coherence traffic outranks the core request, always",
@@ -54,13 +76,16 @@ def tile(path):
     s.block(704, 190, 220, 60, "dir_ctrl", role="control", size=13,
             sub=("one request at a time,", "VN0 head held until commit"))
     s.block(944, 190, 232, 60, "tbe_file", role="storage", size=13,
-            sub=("4 entries, CAM on line addr", "outstanding ack count"))
+            sub=(f"{P.TBE_ENTRIES} entries, CAM on line addr",
+                 "outstanding ack count"))
     s.block(704, 266, 220, 46, "l2_bank", role="storage", size=12,
-            sub=("16 KB, 64 sets x 8 ways",))
+            sub=(f"{kb(P.L2_SETS, P.L2_WAYS)}, {P.L2_SETS} sets x "
+                 f"{P.L2_WAYS} ways",))
     s.block(944, 266, 232, 46, "directory metadata", role="storage", size=12,
-            sub=("owner, sharer vector, 5 states",))
+            sub=(f"owner, sharer vector, {DIR_STATES} states",))
     s.block(704, 328, 472, 44, "dir_coh_fsm", role="datapath", size=12,
-            sub=("pure function (dir state, event) -> next state + actions, 5 states",))
+            sub=("pure function (dir state, event) -> next state + "
+                 f"actions, {DIR_STATES} states",))
     s.text(940, 394, "accepts VN0 and VN2 · forwards on VN1 · answers on VN2",
            size=11, fill=MUTED, mono=False)
     s.text(940, 412, "strictly inclusive: an L2 eviction recalls the L1 copies",
@@ -80,14 +105,17 @@ def tile(path):
     # ---- NIC and router -----------------------------------------------------
     s.block(40, 600, 1160, 96, "tile_nic", role="iface", size=14, label_dy=30)
     s.lines(620, 648, [
-        "three separate packetisers, three separate reassembly paths, three separate credit pools",
+        f"{params.spell(P.NUM_VNETS)} separate packetisers, "
+        f"{params.spell(P.NUM_VNETS)} separate reassembly paths, "
+        f"{params.spell(P.NUM_VNETS)} separate credit pools",
         "only the physical flit port is shared, and it is arbitrated per FLIT, not per packet",
         "a blocked VN0 can never hold the injection path a VN2 response needs",
     ], size=10.5, fill=MUTED, mono=False, gap=15)
 
     s.block(40, 730, 1160, 62, "router  —  local port", role="control", size=13,
             label_dy=26)
-    s.text(620, 774, "5 ports x 6 VCs (2 per vnet), XY routing, credit flow control",
+    s.text(620, 774, f"{P.NUM_PORTS} ports x {P.VCS_PER_PORT} VCs "
+           f"({P.VCS_PER_VNET} per vnet), XY routing, credit flow control",
            size=10.5, fill=MUTED, mono=False)
 
     # ---- the eight message ports --------------------------------------------
@@ -161,18 +189,19 @@ def l1_pipeline(path):
     s.arrow([(680, 178), (730, 178)], color=INK, sw=2.0)
     s.text(1105, 150, "one request in the pipe,", size=11, fill=MUTED,
            mono=False)
-    s.text(1105, 166, "but up to four transactions", size=11, fill=MUTED,
+    s.text(1105, 166, f"but up to {params.spell(P.MSHR_ENTRIES)} "
+           f"transactions", size=11, fill=MUTED,
            mono=False)
     s.text(1105, 182, "outstanding in the MSHR file", size=11, fill=MUTED,
            mono=False)
 
     # ---- arrays -------------------------------------------------------------
     s.block(360, 268, 150, 56, "tag + state", role="storage", size=12,
-            sub=("64 x 2",))
+            sub=(f"{P.L1_SETS} x {P.L1_WAYS}",))
     s.block(530, 268, 150, 56, "data array", role="storage", size=12,
-            sub=("64 x 2 x 32 B",))
+            sub=(f"{P.L1_SETS} x {P.L1_WAYS} x {P.LINE_BYTES} B",))
     s.block(730, 268, 250, 56, "mshr_file", role="storage", size=12,
-            sub=("4 entries · CAM on line address",))
+            sub=(f"{P.MSHR_ENTRIES} entries · CAM on line address",))
     s.arrow([(420, 268), (420, 224)], color=MUTED, sw=1.6, label="read",
             label_side=-1)
     s.arrow([(590, 268), (590, 224)], color=MUTED, sw=1.6)
@@ -377,7 +406,8 @@ def dir_uarch(path):
             mono=False, gap=13)
 
     s.group_box(330, 110, 600, 250, "dir_ctrl", role="control")
-    s.text(630, 154, "one transaction in flight — 12 controller states",
+    s.text(630, 154, f"one transaction in flight — {DIR_FSM_STATES} "
+           f"controller states",
            size=11, fill=MUTED, mono=False)
 
     def pills(y, names, col, label):
@@ -422,11 +452,12 @@ def dir_uarch(path):
 
     # ---- storage ------------------------------------------------------------
     s.block(330, 400, 280, 66, "l2_bank", role="storage", size=13,
-            sub=("16 KB — 64 sets x 8 ways",))
+            sub=(f"{kb(P.L2_SETS, P.L2_WAYS)} — {P.L2_SETS} sets x "
+                 f"{P.L2_WAYS} ways",))
     s.block(630, 400, 300, 66, "directory metadata", role="storage", size=13,
             sub=("dir_state, owner, sharer vector, data_valid",))
     s.block(970, 400, 210, 66, "tbe_file", role="storage", size=13,
-            sub=("4 entries, ack counter",))
+            sub=(f"{P.TBE_ENTRIES} entries, ack counter",))
     for x in (470, 780, 1075):
         s.arrow([(x, 360), (x, 400)], color=MUTED, sw=1.6, both=True)
     s.text(630, 486, "the tag and the coherence metadata are one array entry, "
@@ -481,10 +512,12 @@ def dir_uarch(path):
     ])
 
     s.rect(635, 756, 545, 164, fill="#f7f9fb", stroke=RULE, rx=8)
-    s.text(659, 782, "Five directory states, and the one that is not obvious",
+    s.text(659, 782, f"{params.spell(DIR_STATES).capitalize()} directory "
+           f"states, and the one that is not obvious",
            size=12, anchor="start", weight="650")
     s.note(659, 802, [
-        "I, S, E, M and S_D. S_D is the transient a line enters when",
+        f"{', '.join(T.DIR_STATE_NAMES[:-1])} and S_D. S_D is the "
+        f"transient a line enters when",
         "a GetS finds it in M: the owner has been forwarded the",
         "request and owes the directory a copy, so the directory",
         "knows the sharer set but not yet the data. A second GetS",
@@ -496,7 +529,9 @@ def dir_uarch(path):
 
 # ---------------------------------------------------------------- router ----
 def router_uarch(path):
-    s = Svg(1240, 900, "Router — three stages, five ports, six VCs per port",
+    s = Svg(1240, 900, f"Router — three stages, "
+            f"{params.spell(P.NUM_PORTS)} ports, "
+            f"{params.spell(P.VCS_PER_PORT)} VCs per port",
             "Input-buffered, virtual-channel, credit flow control, XY routing. "
             "All outputs registered, so the link is a wire and nothing else.")
 
@@ -522,7 +557,8 @@ def router_uarch(path):
         for k in range(4):
             s.rect(240 + k * 22, y + 4, 18, 20, fill="#ffffff", stroke=RULE,
                    rx=3, sw=1.0)
-    s.text(264, 424, "VC_DEPTH = 4 flits", size=9.5, fill=MUTED, mono=False)
+    s.text(264, 424, f"VC_DEPTH = {P.VC_DEPTH} flits", size=9.5, fill=MUTED,
+           mono=False)
     s.text(210, 452, "route_compute: XY, purely combinational from the head",
            size=9.5, fill=MUTED, mono=False)
 
@@ -591,12 +627,16 @@ def router_uarch(path):
     ])
 
     s.note(60, 742, [
-        "Sizing, and why each number is what it is.  5 ports: four neighbours and the local tile.  "
-        "6 VCs per port: three virtual networks x 2, and the",
+        f"Sizing, and why each number is what it is.  {P.NUM_PORTS} ports: "
+        f"four neighbours and the local tile.  {P.VCS_PER_PORT} VCs per port: "
+        f"{params.spell(P.NUM_VNETS)} virtual networks x {P.VCS_PER_VNET}, "
+        f"and the",
         "second VC per vnet exists so a blocked packet does not idle the vnet — one per vnet is correct but "
         "leaves measurable throughput on the table.",
-        "4 flits per VC buffer: the longest packet is 3 flits (head + 2 body) and the fourth slot covers the "
-        "credit round trip.  Occupancy 4 is therefore",
+        f"{P.VC_DEPTH} flits per VC buffer: the longest packet is "
+        f"{1 + P.FLITS_PER_LINE} flits (head + {P.FLITS_PER_LINE} body) and "
+        f"the last slot covers the credit round trip.  Occupancy "
+        f"{P.VC_DEPTH} is therefore",
         "unreachable by construction, which is one of the coverage exclusions with a written argument rather "
         "than a waiver.",
     ])

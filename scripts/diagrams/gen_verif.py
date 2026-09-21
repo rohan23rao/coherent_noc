@@ -3,8 +3,21 @@ loop that checks the tests themselves."""
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from svg import Svg, VNET, INK, MUTED, RULE, ROLE
+import params
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "img")
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+OUT = os.path.join(ROOT, "docs", "img")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "tb"))
+import mutations as MUT  # noqa: E402
+from models import coverage as COV  # noqa: E402
+
+# The three numbers this figure would otherwise get wrong first: how many
+# mutations there are, and how long the two coverage lists are. They come from
+# the files that own them.
+N_MUTATIONS = len(MUT.MUTATIONS)
+N_DEFENSIVE = len(COV.DEFENSIVE)
+N_DEFENSIVE_BINS = len(COV.DEFENSIVE_BINS)
 
 RED, AMBER, BLUE, GREEN = "#c2565c", "#d9a441", "#3f7fb5", "#5a9e68"
 
@@ -42,7 +55,7 @@ def verification(path):
          " violation, no value mismatch. Found B16, B19, B20 (x3) and B21",
          "absence. The parts of the state space it does not reach are"
          " exactly what the coverage report is for"),
-        ("6", "Mutation", "make mutate, 15 mutations", RED,
+        ("6", "Mutation", f"make mutate, {N_MUTATIONS} mutations", RED,
          "the directed tier is sensitive to the arcs it claims to cover."
          " A mutation that survives is an open item, not a pass",
          "that the arcs NOT in the table are unnecessary"),
@@ -101,8 +114,9 @@ def verification(path):
     s.note(679, yb + 48, [
         "UNCOVERED AND REACHABLE — must be empty, and is.",
         "",
-        "UNCOVERED BY CONSTRUCTION — 26 table cells and one",
-        "occupancy bin, each with a written argument for why the",
+        f"UNCOVERED BY CONSTRUCTION — {N_DEFENSIVE} table cells and",
+        f"{params.spell(N_DEFENSIVE_BINS)} occupancy bin, each with a "
+        f"written argument for why the",
         "design cannot reach it. Not a waiver list: a waiver says",
         "'ignore this', and each of these says why the cell is",
         "unreachable, which is a claim about the implementation",

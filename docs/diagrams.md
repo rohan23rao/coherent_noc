@@ -4,12 +4,17 @@ Every figure here is generated, not drawn. `scripts/diagrams/` builds the SVGs
 and the Mermaid; `make diagrams` regenerates all of them. Two consequences
 worth stating:
 
-* **The state machines cannot drift from the design.** They are rendered from
-  `tb/models/tables.py`, the independent transcription that
+* **Nothing in a figure is typed from memory.** The state machines are
+  rendered from `tb/models/tables.py`, the independent transcription that
   `test_protocol_l1_table.py` and `test_protocol_dir_table.py` compare the RTL
-  to, cell by cell. If the RTL and that table disagree, those tests fail. So a
-  state machine that is wrong is a state machine that could not have been
-  generated.
+  to cell by cell — so a state machine that disagrees with the RTL is one that
+  could not have been generated. Every *number* comes the same way:
+  `scripts/diagrams/params.py` reads the sizes and the packet fields out of
+  `rtl/pkg/coh_pkg.sv`, the state counts out of the protocol table and the
+  directory controller's own enum, and the mutation and coverage counts out of
+  the files that own them. A figure claiming "64 sets x 2 ways" is not a
+  caption, it is a query. If a parameter it needs disappears, `make diagrams`
+  fails rather than drawing a stale number.
 * **The block diagrams are hand-placed on purpose.** Placement carries meaning
   in a microarchitecture drawing — the MSHR file belongs on a particular side
   of the pipeline — and a force-directed layout will happily put it on the
@@ -23,11 +28,10 @@ prevents, the decision that chose it, and what that choice cost.
 
 draw.io was the obvious choice and is the wrong one here. A drawing tool stores
 the *picture*; a reviewer then has to take on trust that the picture still
-matches the RTL. Ten figures across a design that changed under twenty-one
+matches the RTL. Eleven figures across a design that changed under twenty-one
 bugs would have drifted, and silently. Generating them means a figure is a
-function of the design: the state machines come from the checked protocol
-table, the sizing numbers come from `coh_pkg.sv`, and `make diagrams` is in the
-same Makefile as `make lint`.
+function of the design — and the check is easy to run: regenerate, and `git
+diff` is empty if nothing moved. That is not available to a drawing.
 
 The cost is real and worth naming: hand-placed SVG is slower to author than
 dragging boxes, and there is no WYSIWYG loop — the loop here was render to PNG
