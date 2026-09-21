@@ -260,6 +260,32 @@ stress configuration that found it, run short.
 
 ---
 
+## Synthesis readiness
+
+Three checks, all inside `make lint`, so they run on every commit. None of them
+is synthesis; each is a specific failure mode that would otherwise be found by
+someone else, on a machine this repository cannot log into, two minutes into a
+`dc_shell` run.
+
+| Check | What it would otherwise cost |
+| --- | --- |
+| `make lint-synth` | Elaborates the whole design with `SYNTHESIS` defined -- every SVA block and every `$display` compiled out, which is the source Design Compiler actually reads. Four signals exist only to feed an assertion; `lint/waivers_synth.vlt` names each one *and the assertion that reads it*, so their disappearance is expected rather than absorbed. Anything else this pass reports is real. |
+| `make lint-synth-bb` | The same elaboration with `syn/blackbox/*.sv` substituted for the behavioural array and the behavioural memory. A stub whose port list has drifted from the module it stands in for is a `PINNOTFOUND` **error** here, and no waiver suppresses it. |
+| `make -C syn dryrun` | Executes `syn/scripts/synth.tcl` and every SDC against no-op stubs for the tool's commands, with each block's real port list extracted from the elaborated RTL. Fails on a required constraint pattern that matches nothing, and on any port left with neither a delay nor a false path. |
+
+The third is the one that earns its keep. A `get_ports` pattern aimed at a
+misspelled port does not fail on the real tool: it silently leaves those ports
+on the conservative default, and the design times against constraints nobody
+intended. Both of its failure modes were verified the same way every other
+check in this document was -- by breaking them on purpose and watching them
+fail, with the offending port named.
+
+What none of them buy: anything about inference, timing, area, or Design
+Compiler's own opinions. Verilator is not Design Compiler and a stub is not a
+tool. See decision D26.
+
+---
+
 ## What is NOT verified
 
 This is the part to read.
@@ -286,10 +312,16 @@ known.
 **ECC, parity, and any other error handling.** The arrays are plain flops and
 SRAM with no protection and no poison, and nothing models a fault.
 
-**Power, clock gating, and any physical property.** No power intent, no
-multi-corner timing, no synthesis. "Synthesizable-shaped" is a coding
-discipline here, not a result: the design has never been through a synthesis
-tool, so its frequency, area and gate count are unknown.
+**Frequency, area and gate count.** Unknown, and this is the largest gap in
+the list. `dc_shell` has never run on this design: there is no Synopsys tool
+and no PDK on the machine it was built on. A complete Design Compiler flow
+exists in `syn/` and three checks below stand in for the front end, but a
+front-end check is not a synthesis result. "Synthesizable-shaped" remains a
+coding discipline here, not a measurement.
+
+**Power, clock gating, and any other physical property.** No power intent, no
+multi-corner timing, no place and route. `syn/README.md` lists what the flow
+deliberately does not attempt and why.
 
 **Scaling.** Everything is verified at four tiles on a 2x2 mesh with a
 four-entry MSHR file and a four-entry TBE file. The full sharer vector, the

@@ -56,13 +56,15 @@ are worth five minutes before `coh_pkg.sv`.
 Read these when you want to know *why* rather than *what*:
 
 - `docs/decisions.md` -- every non-obvious choice as decision, alternatives,
-  why, and cost. Twenty-four entries.
+  why, and cost. Twenty-six entries.
 - `docs/bug_log.md` -- twenty-one bugs, each with how it was localised and the
   test that catches it now. The last six are the interesting ones; they are
   all races or ordering, and none of them were found by directed testing.
 - `docs/deadlock.md` -- the message dependency graph and why three virtual
   networks suffice.
 - `docs/noc_perf.md` -- load-latency curves and where the knee is.
+- `docs/diagrams.md` -- the same arguments as pictures, generated rather than
+  drawn so they cannot drift from the design.
 - `docs/interview_notes.md` -- ten hard questions with answers.
 
 ## If you only have ten minutes
@@ -70,3 +72,10 @@ Read these when you want to know *why* rather than *what*:
 `coh_pkg.sv` for the shape, `l1_coh_fsm.sv` for the protocol, `docs/races.md`
 for what the protocol is defending against, and bug **B20** in the bug log for
 what it is actually like to get this right.
+
+## If you have the tools
+
+| # | File | What to look for |
+| --- | --- | --- |
+| — | `syn/README.md` | The Design Compiler flow, and the first paragraph says the tool has never run it. Read the "what to send back" section before running anything: `check_timing.rpt` matters more than `qor.rpt`, and the reason is the same one that runs through the rest of this project -- a silent gap is worse than a loud failure. |
+| — | `syn/constraints/*.sdc` | The interesting part of a synthesis setup is not `compile_ultra`, it is which ports have a known neighbour. Every budget here is argued in a comment, and a required pattern that matches nothing is an error rather than a silent fallback. |

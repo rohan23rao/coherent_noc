@@ -107,37 +107,35 @@ the rest of the machine. This is bug B20 and decision D23.
 
 ### The 13 stable and transient states
 
-<!-- BEGIN l1-fsm -->
+Thirteen states and thirty-three arcs on one canvas is a picture of a mess, so
+the machine is drawn in the two halves the states themselves already form. A
+transient is either waiting for a line to arrive or waiting for permission to
+let one go, and none is ever both. The four stable states appear in both
+halves, because that is where the halves meet — and the generator fails if any
+arc in the table lands in neither.
+
+**Getting a line** — `I`, `S`, `E`, `M`, and the five transients that wait for
+data or for acks.
+
+<!-- BEGIN l1-fsm-fetch -->
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> I
-    E --> EI_A : Evict
     E --> I : Fwd-GetM
     E --> M : Store
     E --> S : Fwd-GetS
-    EI_A --> I : Put-Ack
-    EI_A --> II_A : Fwd-GetM
-    EI_A --> SI_A : Fwd-GetS
     I --> IM_AD : Store
     I --> IS_D : Load
-    II_A --> I : Put-Ack
     IM_A --> M : ack_cnt == 0 after data (retire)
     IM_AD --> IM_A : Data[ack>0]
     IM_AD --> M : Data[ack=0]<br>Data-owner
     IS_D --> E : DataE
     IS_D --> S : Data[ack=0]<br>Data-owner
     M --> I : Fwd-GetM
-    M --> MI_A : Evict
     M --> S : Fwd-GetS
-    MI_A --> I : Put-Ack
-    MI_A --> II_A : Fwd-GetM
-    MI_A --> SI_A : Fwd-GetS
     S --> I : Inv
-    S --> SI_A : Evict
     S --> SM_AD : Store
-    SI_A --> I : Put-Ack
-    SI_A --> II_A : Inv
     SM_A --> M : ack_cnt == 0 after data (retire)
     SM_AD --> IM_AD : Inv
     SM_AD --> M : Data[ack=0]<br>Data-owner
@@ -150,9 +148,46 @@ stateDiagram-v2
     class I,S,E,M stable
     class IS_D,IM_AD,SM_AD wdata
     class IM_A,SM_A wack
+```
+<!-- END l1-fsm-fetch -->
+
+**Giving a line up** — the four transients that wait for a Put-Ack. Each one
+remembers what the line was when the eviction started, because a forward that
+arrives meanwhile still has to be answered correctly: `MI_A` owes data, `SI_A`
+owes only an ack, and `II_A` owes nothing but still has to wait.
+
+<!-- BEGIN l1-fsm-evict -->
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> I
+    E --> EI_A : Evict
+    E --> I : Fwd-GetM
+    E --> M : Store
+    E --> S : Fwd-GetS
+    EI_A --> I : Put-Ack
+    EI_A --> II_A : Fwd-GetM
+    EI_A --> SI_A : Fwd-GetS
+    II_A --> I : Put-Ack
+    M --> I : Fwd-GetM
+    M --> MI_A : Evict
+    M --> S : Fwd-GetS
+    MI_A --> I : Put-Ack
+    MI_A --> II_A : Fwd-GetM
+    MI_A --> SI_A : Fwd-GetS
+    S --> I : Inv
+    S --> SI_A : Evict
+    SI_A --> I : Put-Ack
+    SI_A --> II_A : Inv
+
+    classDef stable fill:#e8f3ea,stroke:#5a9e68,stroke-width:2px
+    classDef wdata fill:#e4ecf7,stroke:#5b86c4
+    classDef wack fill:#fdf2d8,stroke:#d9a441
+    classDef wput fill:#f0e9f6,stroke:#8d6cae
+    class I,S,E,M stable
     class MI_A,EI_A,SI_A,II_A wput
 ```
-<!-- END l1-fsm -->
+<!-- END l1-fsm-evict -->
 
 Self-loops are left off so the shape is readable. What a transient state
 *absorbs* without moving is just as load-bearing as what moves it, so it is

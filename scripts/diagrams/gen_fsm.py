@@ -38,7 +38,24 @@ def _merge(edges):
     return [(s, d, "<br>".join(labs)) for (s, d), labs in by_pair.items()]
 
 
-def l1_mermaid():
+# The thirteen states split into two pictures. One diagram with all of them is
+# a legible graph only in the sense that nothing overlaps: thirteen nodes and
+# thirty-three arcs on one canvas is a picture of a mess, and the reader learns
+# nothing from it.
+#
+# The split is not cosmetic -- it is the same one the states themselves make. A
+# transient is either waiting for a line to arrive (IS_D, IM_AD, IM_A, SM_AD,
+# SM_A) or waiting for permission to let one go (MI_A, EI_A, SI_A, II_A), and
+# no transient is ever both. The four stable states appear in both halves,
+# which is correct: they are where the two halves meet.
+#
+# A split diagram can lie by omission, so `_check_split_covers` fails the
+# generator if any arc in the table appears in neither half.
+L1_FETCH = ("I", "S", "E", "M", "IS_D", "IM_AD", "IM_A", "SM_AD", "SM_A")
+L1_EVICT = ("I", "S", "E", "M", "MI_A", "EI_A", "SI_A", "II_A")
+
+
+def _l1_edges():
     edges = []
     for (st, ev), (nxt, act) in sorted(T.L1_TABLE.items()):
         if nxt == st:
@@ -47,11 +64,31 @@ def l1_mermaid():
                       T.EVENT_NAMES[ev]))
     # Two arcs are not table cells and would otherwise leave IM_A and SM_A
     # looking like dead ends. Completion is not an event: it is the
-    # controller's condition `ack_cnt == 0 once the data has arrived`, which
-    # is exactly the distinction race R1 turns on, so it is drawn and labelled
-    # as what it is rather than quietly folded into Inv-Ack.
+    # controller's condition `ack_cnt == 0 once the data has arrived`, which is
+    # exactly the distinction race R1 turns on, so it is drawn and labelled as
+    # what it is rather than quietly folded into Inv-Ack.
     edges.append(("IM_A", "M", "ack_cnt == 0 after data (retire)"))
     edges.append(("SM_A", "M", "ack_cnt == 0 after data (retire)"))
+    return edges
+
+
+def _check_split_covers(edges):
+    for src, dst, lab in edges:
+        in_f = src in L1_FETCH and dst in L1_FETCH
+        in_e = src in L1_EVICT and dst in L1_EVICT
+        if not (in_f or in_e):
+            raise SystemExit(
+                f"gen_fsm: the {src} -> {dst} arc ({lab}) falls in neither "
+                f"half of the split. Fix L1_FETCH/L1_EVICT rather than the "
+                f"diagram -- a split that drops an arc is worse than one big "
+                f"picture.")
+
+
+def l1_mermaid(half):
+    keep = L1_FETCH if half == "fetch" else L1_EVICT
+    edges = _l1_edges()
+    _check_split_covers(edges)
+    edges = [e for e in edges if e[0] in keep and e[1] in keep]
     out = ["stateDiagram-v2", "    direction LR", "    [*] --> I"]
     for src, dst, lab in sorted(_merge(edges)):
         out.append(f"    {src} --> {dst} : {lab}")
@@ -64,7 +101,9 @@ def l1_mermaid():
     out.append("    class " + ",".join(L1_STABLE) + " stable")
     for cls, group in zip(("wdata", "wack", "wput"),
                           L1_TRANSIENT_FILL.values()):
-        out.append("    class " + ",".join(group) + f" {cls}")
+        group = [g for g in group if g in keep]
+        if group:
+            out.append("    class " + ",".join(group) + f" {cls}")
     return "\n".join(out)
 
 
@@ -110,7 +149,8 @@ def l1_stall_table():
 
 
 BLOCKS = {
-    "l1-fsm": lambda: "```mermaid\n" + l1_mermaid() + "\n```",
+    "l1-fsm-fetch": lambda: "```mermaid\n" + l1_mermaid("fetch") + "\n```",
+    "l1-fsm-evict": lambda: "```mermaid\n" + l1_mermaid("evict") + "\n```",
     "dir-fsm": lambda: "```mermaid\n" + dir_mermaid() + "\n```",
     "l1-stalls": l1_stall_table,
 }
