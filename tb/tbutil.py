@@ -14,6 +14,24 @@ def u(sig) -> int:
     return int(sig.value)
 
 
+def s(sig) -> int:
+    """Read a signal as a SIGNED int, using the signal's own width.
+
+    The width is deliberately not written down here. A testbench constant that
+    mirrors an RTL parameter is the same defect as bug B22, one layer out: when
+    ``ACK_CNT_W`` was derived from ``NUM_TILES`` the probe's hard-coded ``4``
+    stopped matching the 3-bit signal it was decoding, read a stored -2 as +6,
+    and reported that race R1 had not happened. The assertion was right and the
+    instrument was wrong, which is the worse way round.
+
+    ``LogicArray.to_signed()`` asks the handle, so there is nothing to keep in
+    step. A 1-bit ``Logic`` has no such method and cannot be negative anyway.
+    """
+    v = sig.value
+    to_signed = getattr(v, "to_signed", None)
+    return to_signed() if to_signed is not None else int(v)
+
+
 async def step(dut, settle_ns: int = 1):
     """Advance one clock cycle and land just *after* the rising edge.
 

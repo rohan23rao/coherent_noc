@@ -28,7 +28,7 @@ prevents, the decision that chose it, and what that choice cost.
 
 draw.io was the obvious choice and is the wrong one here. A drawing tool stores
 the *picture*; a reviewer then has to take on trust that the picture still
-matches the RTL. Eleven figures across a design that changed under twenty-two
+matches the RTL. Eleven figures across a design that changed under twenty-three
 bugs would have drifted, and silently. Generating them means a figure is a
 function of the design — and the check is easy to run: regenerate, and `git
 diff` is empty if nothing moved. That is not available to a drawing.

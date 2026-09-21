@@ -43,7 +43,7 @@ backpressured anything would be a timing hack by another name.
 from collections import Counter
 
 from models.coherence_checker import STATE_NAMES
-from tbutil import u
+from tbutil import s as signed, u
 
 NUM_TILES = 4
 
@@ -73,11 +73,6 @@ _RECALL_TYPES = (MSG_RECALL, MSG_RECALL_INV)
 
 D_EXEC = 4          # dir_ctrl's FSM encoding for "consult the table"
 DIR_STATE_LSB = 7   # dir_meta_t = valid | tag | dir_state | sharers | owner | data_valid
-ACK_CNT_W = 4
-
-
-def _signed(v: int, width: int = ACK_CNT_W) -> int:
-    return v - (1 << width) if v & (1 << (width - 1)) else v
 
 
 def l1_of(dut, tile: int):
@@ -145,7 +140,8 @@ class ArcProbe:
                 arc = (t, st, u(l1.vn2_event))
                 self.l1_arcs[arc] += 1
                 self._note(cycle, f"tile {t} L1 {l1_arc_name(arc)}")
-                self.min_ack[t] = min(self.min_ack[t], _signed(u(l1.vn2_ack_next)))
+                self.min_ack[t] = min(self.min_ack[t],
+                                      signed(l1.vn2_ack_next))
 
             if u(l1.s1_valid_q):
                 arc = (t, u(l1.s1_state), u(l1.s1_event))

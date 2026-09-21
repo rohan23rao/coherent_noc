@@ -1172,3 +1172,87 @@ What that check does **not** prove is worth stating in the same breath:
 elaborating at sixteen tiles says the design has sixteen tiles' worth of
 structure, not that the protocol still works at that size. The stress tier has
 never run at anything other than four. `docs/verification.md` says so.
+
+---
+
+## B23. The instrument mirrored a parameter it should have asked for (Phase 15, testbench)
+
+**Symptom.** Immediately after fixing B22, race R1 failed -- and failed on its
+*witness*, not its outcome:
+
+```
+AssertionError: tile 0's ack_cnt never went negative (minimum 0). That is the
+whole point of R1: an unsigned counter wraps here and the transaction never
+completes.
+```
+
+Eleven of twelve races passed. Every table test passed. Lint was clean at four
+mesh sizes.
+
+**How it was localized.** By taking the assertion literally instead of
+assuming the RTL change had broken the race. R1's witness reads `ack_cnt` and
+requires it to go negative; the test reported a minimum of exactly 0, which is
+a suspicious number -- a broken race would produce *some* interleaving, and a
+counter that never moves at all is more consistent with a decoding problem than
+a protocol one.
+
+`tb/models/probe.py` had:
+
+```python
+ACK_CNT_W = 4
+
+def _signed(v: int, width: int = ACK_CNT_W) -> int:
+    return v - (1 << width) if v & (1 << (width - 1)) else v
+```
+
+B22 had just changed `ACK_CNT_W` in the RTL from 4 to `$clog2(NUM_TILES) + 1`,
+which is 3. The arithmetic follows immediately: the design stores -2 as
+`3'b110`, the probe reads 6, tests bit 3 of a number that only has three bits,
+finds it clear, and reports +6. The minimum of {0, +6} is 0.
+
+**Root cause.** A testbench constant mirroring an RTL parameter -- which is
+bug B22 again, one layer out. The same defect in the same week, and the second
+instance was created by fixing the first.
+
+That is worth sitting with. The RTL was correct throughout: a 3-bit signed
+field holds -4..+3 and the race needs -2. What failed was the *instrument*, and
+it failed by reporting that a race had not happened when it had. This project's
+whole argument about witnesses -- that a test which checks only outcomes cannot
+tell "handled correctly" from "never happened" -- depends on the witness being
+right. An instrument that silently mis-decodes is worse than no instrument,
+because it produces a confident wrong answer.
+
+The near miss is the interesting part. This failed loudly because R1 asserts
+its witness. Had R1 only checked that the transaction completed, the probe
+would have gone on reporting nonsense and nobody would have known, which is
+exactly the failure mode bug B17 was.
+
+**Fix.** Stop mirroring. `tbutil.s()` reads a signal as signed using the
+signal's own width, taken from the handle:
+
+```python
+def s(sig) -> int:
+    v = sig.value
+    to_signed = getattr(v, "to_signed", None)
+    return to_signed() if to_signed is not None else int(v)
+```
+
+There is no width to keep in step, so there is nothing to get out of step.
+`ACK_CNT_W` and `_signed` are deleted from the probe.
+
+**Test that catches it now.** `test_races.py::test_r1_early_inv_ack`, which is
+the test that caught it this time -- its witness asserts that `ack_cnt` went
+negative and reports the minimum it saw. With the fix it prints the value
+`docs/races.md` has documented since Phase 7:
+
+```
+R1: 2 early Inv-Acks, ack_cnt reached -2 before Data
+```
+
+The general lesson has no single test behind it and should be stated plainly:
+no constant in `tb/` may duplicate a value that `rtl/pkg/coh_pkg.sv` defines.
+Where the testbench needs a width it asks the handle; where it needs a table it
+uses `tb/models/tables.py`, which is compared against the RTL cell by cell. The
+enum encodings still in `probe.py` are the remaining exception, and they are
+checked -- every one of them appears in an arc name that a passing table test
+would contradict.
