@@ -145,6 +145,35 @@ their measured worst case on every stress run rather than assumed adequate.
 
 ---
 
+## The instruments
+
+Three of the bugs in Phase 11 were found by a liveness assertion saying that
+something was stuck, and a liveness assertion does not say *what it is waiting
+for*. These exist for that gap, and they are switched on by an environment
+variable rather than always running:
+
+| Instrument | Switch | What it gives |
+| --- | --- | --- |
+| `tb/models/probe.py` | always, in directed tests | every (state, event) pair presented to either table, as it happens |
+| `tb/models/probe.py::LivenessGauge` | always, in stress runs | the worst MSHR and TBE age observed, against the bounds |
+| `tb/models/hangdump.py::stuck/dump` | `STRESS_HANG=<cycles>` | the whole machine the moment any entry has been live too long: every directory's FSM and TBEs, every cache's MSHRs and what its inputs are offering, every network interface's reassembly slots with the *messages* in them, and every router's VC states and buffer occupancy |
+| `tb/models/hangdump.py::Tracer` | `STRESS_HANG` | a ring buffer of the last few hundred messages, printed with the dump |
+| `COCOTB_CASE=<name>` | environment | run one coroutine out of a module, for iterating on a single failure |
+
+The dump plus the ring buffer is what turned "an MSHR has been live 3,000
+cycles" into a readable sequence -- a cache with every acknowledgement it was
+waiting for, still in `SM_AD`, stalling a forward that two directories were
+ultimately blocked behind. That is bug B20's third manifestation, and nothing
+short of the history would have identified it.
+
+They read internal signals by name, which is exactly what `docs/decisions.md`
+argues against for the SWMR checker. The difference is audience: the checker is
+a correctness monitor that has to survive elaboration, while these are
+debugging instruments for a handful of tests, and pinning them to signal names
+is acceptable where those tests are rewritten whenever the controller is.
+
+---
+
 ## Coverage
 
 Functional coverage is collected across all five stress configurations and
