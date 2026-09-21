@@ -1,22 +1,22 @@
 [
   {
     "credit_delay": 1,
-    "accepted": 0.3083941605839416,
-    "mean_latency": 8.285637439483594
+    "accepted": 0.3077814569536424,
+    "mean_latency": 9.353953738569123
   },
   {
     "credit_delay": 4,
-    "accepted": 0.303476821192053,
-    "mean_latency": 8.864157119476268
+    "accepted": 0.30227572559366755,
+    "mean_latency": 11.312056737588652
   },
   {
     "credit_delay": 8,
-    "accepted": 0.303476821192053,
-    "mean_latency": 10.825422804146209
+    "accepted": 0.29970568999345976,
+    "mean_latency": 18.32242225859247
   },
   {
     "credit_delay": 16,
-    "accepted": 0.24822501365374114,
-    "mean_latency": 170.6072607260726
+    "accepted": 0.23908469226722778,
+    "mean_latency": 212.84543454345433
   }
 ]

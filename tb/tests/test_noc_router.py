@@ -159,7 +159,14 @@ async def test_every_input_reaches_every_legal_output(dut):
 
 @cocotb.test()
 async def test_multiflit_packet_stays_contiguous(dut):
-    """Body flits follow their head, in order, with nothing interleaved."""
+    """Body flits follow their head, in order, with nothing interleaved.
+
+    The two packets enter on different input ports but on the same VC index,
+    so under the source-determined VC rule (D22) they contend for one output
+    VC and come out one after the other rather than side by side. That is the
+    case worth testing: wormhole flow control has to hold the channel for a
+    whole packet, and a VC released early interleaves them.
+    """
     h = await _setup(dut)
     my_x = int(dut.MY_X.value)
     my_y = int(dut.MY_Y.value)
@@ -176,21 +183,44 @@ async def test_multiflit_packet_stays_contiguous(dut):
     stream = [f for p, f, _ in h.received if p == out_port]
     assert len(stream) == 6, f"expected 6 flits, got {len(stream)}"
 
-    # Group by VC: each VC must carry one complete, contiguous, in-order packet.
+    # Split each VC's stream into packets at tail boundaries. Two packets may
+    # legitimately share one output VC -- a packet keeps the VC index it was
+    # injected on (D22), and the testbench injects both on the lowest free
+    # input VC -- so the property is NOT "one packet per VC". It is that no
+    # packet's flits are interleaved with another's, which is the harder case
+    # and the one this checks: on a shared VC the second packet must not start
+    # until the first has sent its tail.
     per_vc = {}
     for f in stream:
         per_vc.setdefault((f.vnet, f.vc_id), []).append(f)
 
+    packets = []
     for vc, flits in per_vc.items():
-        assert flits[0].head == 1, f"VC {vc} did not start with a head"
-        assert flits[-1].tail == 1, f"VC {vc} did not end with a tail"
-        assert sum(f.head for f in flits) == 1, f"VC {vc} interleaved two packets"
-        assert sum(f.tail for f in flits) == 1, f"VC {vc} interleaved two packets"
+        cur = []
+        for f in flits:
+            if not cur:
+                assert f.head == 1, (
+                    f"VC {vc} continued after a tail without a new head")
+            else:
+                assert f.head == 0, f"VC {vc} interleaved two packets"
+            cur.append(f)
+            if f.tail:
+                packets.append((vc, cur))
+                cur = []
+        assert not cur, f"VC {vc} ended mid-packet: {len(cur)} flits with no tail"
+
+    assert len(packets) == 2, f"expected 2 packets out, got {len(packets)}"
+    for vc, flits in packets:
+        assert len(flits) == 3, f"VC {vc} packet had {len(flits)} flits, not 3"
         base = flits[0].payload
         assert [f.payload for f in flits] == [base + i for i in range(len(flits))], (
             f"VC {vc} reordered a packet: {[hex(f.payload) for f in flits]}"
         )
-    dut._log.info("two 3-flit packets stayed contiguous on %d VCs", len(per_vc))
+    bases = sorted(f[0].payload for _, f in packets)
+    assert bases == [0x1000, 0x2000], (
+        f"a packet was lost or corrupted: heads {[hex(b) for b in bases]}")
+    dut._log.info("two 3-flit packets stayed contiguous over %d VC(s)",
+                  len(per_vc))
 
 
 @cocotb.test()

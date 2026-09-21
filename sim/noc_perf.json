@@ -2,7 +2,7 @@
   {
     "offered": 0.02,
     "accepted": 0.020068027210884354,
-    "mean_latency": 8.016949152542374,
+    "mean_latency": 8.067796610169491,
     "completed": 177,
     "generated": 177,
     "mean_hops": 1.3389830508474576
@@ -10,7 +10,7 @@
   {
     "offered": 0.05,
     "accepted": 0.05031731640979148,
-    "mean_latency": 7.921171171171171,
+    "mean_latency": 8.054054054054054,
     "completed": 444,
     "generated": 444,
     "mean_hops": 1.3018018018018018
@@ -18,7 +18,7 @@
   {
     "offered": 0.1,
     "accepted": 0.10054347826086957,
-    "mean_latency": 8.022522522522523,
+    "mean_latency": 8.397522522522523,
     "completed": 888,
     "generated": 888,
     "mean_hops": 1.3175675675675675
@@ -26,7 +26,7 @@
   {
     "offered": 0.15,
     "accepted": 0.15436165379373012,
-    "mean_latency": 8.126563649742458,
+    "mean_latency": 8.699779249448124,
     "completed": 1359,
     "generated": 1359,
     "mean_hops": 1.3399558498896247
@@ -34,15 +34,15 @@
   {
     "offered": 0.2,
     "accepted": 0.20126926563916592,
-    "mean_latency": 8.14695945945946,
+    "mean_latency": 8.846283783783784,
     "completed": 1776,
     "generated": 1776,
     "mean_hops": 1.320945945945946
   },
   {
     "offered": 0.25,
-    "accepted": 0.24784775713638424,
-    "mean_latency": 8.205210237659964,
+    "accepted": 0.2473993668023519,
+    "mean_latency": 9.15127970749543,
     "completed": 2188,
     "generated": 2188,
     "mean_hops": 1.3290676416819014
@@ -50,31 +50,31 @@
   {
     "offered": 0.3,
     "accepted": 0.2967829632985954,
-    "mean_latency": 8.374809160305343,
+    "mean_latency": 9.423664122137405,
     "completed": 2620,
     "generated": 2620,
     "mean_hops": 1.3393129770992367
   },
   {
     "offered": 0.4,
-    "accepted": 0.3964463558171118,
-    "mean_latency": 8.618327148158722,
+    "accepted": 0.39501578709968427,
+    "mean_latency": 10.063088781044819,
     "completed": 3503,
     "generated": 3503,
     "mean_hops": 1.3311447330859263
   },
   {
     "offered": 0.5,
-    "accepted": 0.49875509280217295,
-    "mean_latency": 9.43430905377808,
+    "accepted": 0.4969553450608931,
+    "mean_latency": 11.856591785795326,
     "completed": 4407,
     "generated": 4407,
     "mean_hops": 1.3392330383480826
   },
   {
     "offered": 0.7,
-    "accepted": 0.67560706401766,
-    "mean_latency": 35.77095245874857,
+    "accepted": 0.6010408483896308,
+    "mean_latency": 156.9937918640745,
     "completed": 6121,
     "generated": 6121,
     "mean_hops": 1.3332788760006535
