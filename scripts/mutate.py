@@ -44,6 +44,10 @@ def run_test(mut) -> tuple[bool, str]:
     """Run the named test. Returns (passed, tail of output)."""
     env = dict(os.environ)
     env["COCOTB_CASE"] = mut["case"]
+    # A mutation against the stress tier lowers the request count: the claim is
+    # that the test notices, not that it notices only after 100,000 requests,
+    # and a full-length run per mutation would make `make mutate` unusable.
+    env.update(mut.get("env", {}))
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", mut["test"], "-q", "--no-header"],
         cwd=str(TB), env=env, capture_output=True, text=True)

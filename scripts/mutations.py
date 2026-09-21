@@ -27,6 +27,7 @@ DIR = "rtl/l2/dir_ctrl.sv"
 VCALLOC = "rtl/noc/vc_allocator.sv"
 
 RACE_TESTS = "tests/test_races.py"
+STRESS_TESTS = "tests/test_stress.py"
 
 MUTATIONS = [
     dict(
@@ -260,6 +261,66 @@ MUTATIONS = [
         replace="""      .req_i       (req_i[p]),""",
         test=RACE_TESTS,
         case="test_r12_blocked_vn0_does_not_stop_vn1_vn2",
+    ),
+
+    # ---- not races: the invariants the constrained-random tier found -------
+    #
+    # These three are not in the race catalogue because nobody thought of them
+    # in advance -- that is the point. Each is paired with the stress
+    # configuration that found it, run short: the claim is that the test
+    # notices, not that it needs a hundred thousand requests to.
+    dict(
+        name="b19-lowest-free-vc",
+        race="B19",
+        file=VCALLOC,
+        why="Choosing the lowest FREE output VC instead of keeping the input's "
+            "lets two messages between one pair of tiles travel on different "
+            "channels and arrive out of order. A Put-Ack then overtakes a "
+            "forward and the forward lands in I, where there is no arc and no "
+            "data to answer with.",
+        find="""        vc_cand[p][v]       = VC_SEL_W'(v);
+        vc_cand_valid[p][v] = !out_vc_busy_i[out_port_i[p][v]][VC_SEL_W'(v)];""",
+        replace="""        vc_cand[p][v]       = '0;
+        vc_cand_valid[p][v] = 1'b0;
+        for (int unsigned k = VCS_PER_VNET; k > 0; k--) begin
+          automatic logic [VC_SEL_W-1:0] idx =
+              vc_index(vc_to_vnet(VC_SEL_W'(v)), VC_ID_W'(k - 1));
+          if (!out_vc_busy_i[out_port_i[p][v]][idx]) begin
+            vc_cand[p][v]       = idx;
+            vc_cand_valid[p][v] = 1'b1;
+          end
+        end""",
+        test=STRESS_TESTS,
+        case="test_stress_16_lines",
+        env={"STRESS_REQUESTS": "8000"},
+    ),
+    dict(
+        name="b20-s1-ignores-coherence-paths",
+        race="B20",
+        file=L1,
+        why="Three stages write a line's coherence state and S1's write is "
+            "last, so it silently overwrites a downgrade or a transient "
+            "advance made in the same cycle. Removing the yield puts all three "
+            "manifestations back.",
+        find="""  assign s1_coh_conflict = s1_vn1_conflict || s1_vn2_conflict;""",
+        replace="""  assign s1_coh_conflict = 1'b0;""",
+        test=STRESS_TESTS,
+        case="test_stress_racing_same_line",
+        env={"STRESS_REQUESTS": "8000"},
+    ),
+    dict(
+        name="b21-pute-leaves-l2-stale",
+        race="B21",
+        file=DIR,
+        why="A PutE says the cache never wrote, so the L2's copy is current "
+            "again. Without that, the flag stays false from the moment E was "
+            "granted and a later back-invalidation frees the way without "
+            "writing back -- losing every store written into the L2 since.",
+        find="""    if (dir_event == DEV_PUTE_OWNER) new_meta.data_valid = 1'b1;""",
+        replace="",
+        test=STRESS_TESTS,
+        case="test_stress_l2_capacity_pressure",
+        env={"STRESS_REQUESTS": "8000"},
     ),
 ]
 
