@@ -332,6 +332,7 @@ def one_run(args, lib, design, period_ps):
     return {
         "top": args.top, "pdk": args.pdk, "corner": args.corner,
         "target_ps": period_ps, "sram": args.sram,
+        "flattened": args.flatten,
         "cells": cells, "flops": flops, "area_um2": area,
         "sta_period_ns": period_ns,
         "sta_worst_slack_ns": slack,
