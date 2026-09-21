@@ -24,6 +24,8 @@ __pycache__/
 # sim/Makefile on every run. Checking either in would let them drift from the
 # design they came from.
 syn/out/
+syn/yosys/out/
+syn/yosys/.work/
 syn/.dryrun/
 syn/.dryrun_pdk/
 syn/filelist.f
