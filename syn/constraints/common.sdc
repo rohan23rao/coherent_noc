@@ -6,7 +6,7 @@
 # is silent. check_timing runs right after this and its output is the first
 # report to read.
 #
-# $PERIOD, $SYN_DRIVING_CELL, $SYN_LOAD_CELL and friends come from
+# $PERIOD, $SYN_DRIVING_CELL, $SYN_LOAD_PF and friends come from
 # syn/setup/pdk.tcl. Nothing here names a technology.
 #==============================================================================
 
@@ -116,8 +116,16 @@ set_output_delay $IO_DEFAULT -clock clk [all_outputs]
 
 set_driving_cell -lib_cell $::SYN_DRIVING_CELL -pin $::SYN_DRIVING_PIN \
                  $data_inputs
-set_load [load_of [lindex $target_library 0]/$::SYN_LOAD_CELL/$::SYN_LOAD_PIN] \
-         [all_outputs]
+set_load $::SYN_LOAD_PF [all_outputs]
+
+# Pre-layout, interconnect delay is whatever the wire load model says it is,
+# and with no model at all it is zero -- which flatters every path in the
+# design. A statistical model is not accurate, but "not accurate" beats
+# "silently absent". Set SYN_WLM="" to turn it off and see the difference.
+if {$::SYN_WLM ne ""} {
+  set_wire_load_model -name $::SYN_WLM -library $::SYN_LIB_NAME
+  set_wire_load_mode top
+}
 
 #------------------------------------------------------------------------------
 # Design rules. Left deliberately tight: a design that only meets timing with

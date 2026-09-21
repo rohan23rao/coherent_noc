@@ -9,7 +9,8 @@
 #   SYN_PDK      saed32 | asap7 | sky130   (default saed32)
 #   SYN_PERIOD   clock period in library time units (default: per PDK)
 #   SYN_SRAM     blackbox | flops          (default blackbox)
-#   SYN_EFFORT   ultra | high              (default ultra)
+#   SYN_EFFORT   ultra | high | flatten    (default ultra)
+#   SYN_FIX_HOLD 1 to run set_fix_hold on the clock (default 0)
 #   SYN_FILELIST path to the RTL file list (written by syn/Makefile)
 #   SYN_OUT      output directory          (default syn/out/$SYN_TOP.$SYN_PDK)
 #
@@ -25,6 +26,7 @@ proc envdef {name default} {
 set TOP      [envdef SYN_TOP      "router"]
 set SRAM     [envdef SYN_SRAM     "blackbox"]
 set EFFORT   [envdef SYN_EFFORT   "ultra"]
+set FIX_HOLD [envdef SYN_FIX_HOLD "0"]
 set FILELIST [envdef SYN_FILELIST "filelist.f"]
 set SYN_ROOT [file normalize [file dirname [file dirname [info script]]]]
 
@@ -133,10 +135,34 @@ write_sdc $OUT/$TOP.sdc
 # to plain compile so the flow still runs without one.
 #------------------------------------------------------------------------------
 set_app_var compile_seqmap_propagate_constants false
-if {$EFFORT eq "ultra"} {
-  compile_ultra -no_autoungroup
-} else {
-  compile -map_effort high -area_effort high
+
+# Hold fixing pre-CTS is fixing hold against an ideal clock, which is not the
+# clock the design will have. It is off by default for that reason, and
+# available because a course flow that expects it should be able to get it.
+if {$FIX_HOLD ne "0"} { set_fix_hold [get_clocks clk] }
+
+switch -- $EFFORT {
+  ultra {
+    # -no_autoungroup keeps the hierarchy, which is the whole point of
+    # synthesising blocks separately: report_area -hierarchy is readable and
+    # the critical path names modules rather than flattened gate soup.
+    compile_ultra -no_autoungroup
+  }
+  high {
+    compile -map_effort high -area_effort high
+  }
+  flatten {
+    # The classic two-pass course flow: map, flatten, re-map. It gives a
+    # better number and a worse report -- after ungroup -all -flatten,
+    # report_area -hierarchy has no hierarchy left to report and the critical
+    # path is a list of gates with no module names on it. Worth running once
+    # to see how much the hierarchy boundaries are costing; not worth making
+    # the default when the question is which BLOCK is slow.
+    compile -map_effort high
+    ungroup -all -flatten
+    compile -map_effort medium
+  }
+  default { error "SYN_EFFORT=$EFFORT is not one of: ultra, high, flatten" }
 }
 
 source -echo $SYN_ROOT/scripts/reports.tcl

@@ -125,7 +125,7 @@ foreach cmd {create_clock set_clock_uncertainty set_clock_transition
              compile_ultra compile report_qor report_timing report_area
              report_constraint report_power report_reference
              report_clock_gating write group_path set_operating_conditions
-             set_wire_load_model} {
+             set_wire_load_model set_wire_load_mode set_fix_hold} {
   proc $cmd {args} "note $cmd \$args"
 }
 
@@ -148,9 +148,16 @@ proc source {args} {
 # pdk.tcl insists on a real kit, which is the right behaviour for the real
 # flow and useless here. Give it a fake one so its glob and error paths are
 # exercised rather than skipped.
-set fake [file join [pwd] .dryrun_pdk lib stdcell_rvt db_nldm]
-file mkdir $fake
-close [open [file join $fake saed32rvt_ss0p75v125c.db] w]
+# Make both flavours the saed32 branch can pick, so the default (lvt/tt) and
+# the pessimistic override (rvt/ss) are both reachable from a dry run.
+foreach {vt corner file} {
+  lvt tt saed32lvt_tt0p85v25c.db
+  rvt ss saed32rvt_ss0p75v125c.db
+} {
+  set fake [file join [pwd] .dryrun_pdk lib stdcell_$vt db_nldm]
+  file mkdir $fake
+  close [open [file join $fake $file] w]
+}
 set env(SAED32_ROOT) [file join [pwd] .dryrun_pdk]
 set env(SYN_PDK) saed32
 

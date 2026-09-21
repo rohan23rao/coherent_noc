@@ -11,7 +11,7 @@
 #   PDK     saed32 | asap7 | sky130        default saed32
 #   PERIOD  clock period, library units    default: per PDK (see setup/pdk.tcl)
 #   SRAM    blackbox | flops               default blackbox
-#   EFFORT  ultra | high                   default ultra (needs DC Ultra)
+#   EFFORT  ultra | high | flatten         default ultra (needs DC Ultra)
 #   DC      path to dc_shell               default dc_shell
 #
 # The RTL file list is not kept here. It is pulled from sim/Makefile every run,
@@ -41,7 +41,8 @@ help:
 	@echo "make dryrun         run the flow with dc_shell stubbed -- no tools needed"
 	@echo ""
 	@echo "PDK=saed32|asap7|sky130   PERIOD=<ns>   SRAM=blackbox|flops"
-	@echo "EFFORT=ultra|high         DC=<path to dc_shell>"
+	@echo "EFFORT=ultra|high|flatten DC=<path to dc_shell>"
+	@echo "VT=lvt|rvt|hvt  CORNER=tt|ss  WLM=<model>  DB=<explicit .db>"
 	@echo ""
 	@echo "Set SAED32_ROOT / ASAP7_ROOT / SKY130_ROOT for the PDK you pick."
 	@echo "See syn/README.md -- it lists exactly which reports to send back."
@@ -57,6 +58,8 @@ $(BLOCKS): filelist
 	@mkdir -p $(SYN_DIR)/out/$@.$(PDK)
 	cd $(SYN_DIR) && \
 	  SYN_TOP=$@ SYN_PDK=$(PDK) SYN_SRAM=$(SRAM) SYN_EFFORT=$(EFFORT) \
+	  $(if $(VT),SYN_VT=$(VT),) $(if $(CORNER),SYN_CORNER=$(CORNER),) \
+	  $(if $(WLM),SYN_WLM=$(WLM),) $(if $(DB),SYN_DB=$(DB),) \
 	  $(if $(PERIOD),SYN_PERIOD=$(PERIOD),) \
 	  SYN_FILELIST=$(SYN_DIR)/filelist.f \
 	  SYN_OUT=$(SYN_DIR)/out/$@.$(PDK) \

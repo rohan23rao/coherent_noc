@@ -36,8 +36,25 @@ Options:
 | `PDK` | `saed32` `asap7` `sky130` | `saed32` | which library to map to |
 | `PERIOD` | a number | per PDK | clock period in library time units |
 | `SRAM` | `blackbox` `flops` | `blackbox` | see [The arrays](#the-arrays) |
-| `EFFORT` | `ultra` `high` | `ultra` | `high` drops to plain `compile`, no DC Ultra licence needed |
+| `EFFORT` | `ultra` `high` `flatten` | `ultra` | `high` is plain `compile`, no DC Ultra licence needed; `flatten` is the two-pass `compile / ungroup -all -flatten / compile` flow |
+| `VT` | `lvt` `rvt` `hvt` | `lvt` | saed32 threshold flavour |
+| `CORNER` | `tt` `ss` | `tt` | saed32 corner. `tt` is what a course flow reports; `ss` is the pessimistic one |
+| `WLM` | a model name | `16000` (saed32) | wire load model; `WLM=` disables it |
+| `DB` | a path | — | an explicit `.db`, skipping the library search entirely |
 | `DC` | a path | `dc_shell` | if `dc_shell` is not on `PATH` |
+
+The saed32 defaults — LVT, typical corner, `NAND2X2_LVT` driver, wire load
+model `16000` — match what the UW-Madison course kits ship, so
+`make -C syn router` should find your library without an override. If it does
+not, `DB=/path/to/saed32lvt_tt0p85v25c.db` bypasses the search, and
+`syn/setup/pdk.tcl` is the only file that should ever need editing.
+
+Two of those defaults are optimistic and worth naming. `tt` is the typical
+corner, not a sign-off corner: `CORNER=ss` is the number to quote if anyone
+asks whether it closes. And `EFFORT=flatten` will give a better frequency than
+`ultra` while destroying the reports — after `ungroup -all -flatten` the
+critical path is a list of gates with no module names on it, which is the wrong
+trade when the question is *which block* is slow.
 
 ```sh
 make -C syn router    PDK=asap7  PERIOD=0.6
