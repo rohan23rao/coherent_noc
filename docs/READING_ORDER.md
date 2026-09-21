@@ -6,6 +6,10 @@ to understand the design, with one line each on what to look for.
 Read the first four before anything else; after that the two halves --
 coherence and network -- are independent and can be read in either order.
 
+If you would rather see it than read it first, `docs/diagrams.md` is the same
+material as figures, and the topology and address-decode drawings in particular
+are worth five minutes before `coh_pkg.sv`.
+
 ## Start here
 
 | # | File | What to look for |

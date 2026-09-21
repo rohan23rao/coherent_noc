@@ -13,7 +13,32 @@ make test TEST=races      # one module
 make mutate   # break each protocol arc, require its test to notice
 make all      # lint + test, and what a clean clone must pass
 make waves TEST=<name>
+make diagrams # regenerate docs/img and the state machines
 ```
+
+## The design in three pictures
+
+Four tiles on a 2x2 mesh. Each is identical: a private L1, the directory bank
+that is home for a quarter of the address space, its own memory, and a router.
+
+![2x2 mesh topology](docs/img/topology.svg)
+
+Inside a tile, two independent protocol agents share one router port. Three
+structurally separate virtual networks, separate packetisers and separate
+credit pools — the deadlock argument is a piece of hardware, not a paragraph.
+
+![tile microarchitecture](docs/img/tile_uarch.svg)
+
+And the argument itself: a request may cause a forward, a forward may cause a
+response, a response causes nothing. Three levels of dependency, three virtual
+networks, and a last level that is a true sink by construction.
+
+![virtual networks](docs/img/vnets.svg)
+
+**`docs/diagrams.md`** has the rest — the L1 pipeline, the three writers of a
+line's state, the directory, the router, the address decode, the flit format
+and both state machines. The state machines are generated from the same table
+the RTL is checked against, so one that is wrong could not have been produced.
 
 ## Where to start
 
@@ -36,6 +61,7 @@ actually like to get this right.
 | `docs/deadlock.md` | the message dependency graph, why three virtual networks suffice, and the separate routing argument |
 | `docs/verification.md` | the six tiers, the coverage report, and an honest list of what is not verified |
 | `docs/noc_perf.md` | load-latency curves, the knee, and what the ordering rule cost |
+| `docs/diagrams.md` | every figure, each stating an argument rather than labelling boxes |
 | `docs/interview_notes.md` | ten hard questions with answers |
 
 ## Current state

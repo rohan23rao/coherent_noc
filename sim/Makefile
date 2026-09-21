@@ -61,7 +61,7 @@ WAIVERS := $(ROOT)/lint/waivers.vlt
 # they are not global.
 WAIVERS_PERFILE := $(ROOT)/lint/waivers_perfile.vlt
 
-.PHONY: all lint lint-rtl lint-style lint-libs lint-slang test waves mutate clean help
+.PHONY: all lint lint-rtl lint-style lint-libs lint-slang test waves mutate diagrams clean help
 
 all: lint test
 
@@ -165,6 +165,16 @@ mutate:
 	@$(PYTHON) $(SCRIPTS)/mutate.py \
 	  $(if $(MUT),--only $(MUT),) $(if $(RACE),--race $(RACE),)
 
+#------------------------------------------------------------------------------
+# Diagrams. The SVGs are generated; the state machines are rendered from the
+# same table the RTL is checked against, so a wrong one cannot be produced.
+#------------------------------------------------------------------------------
+diagrams:
+	@$(PYTHON) $(SCRIPTS)/diagrams/gen_system.py
+	@$(PYTHON) $(SCRIPTS)/diagrams/gen_uarch.py
+	@$(PYTHON) $(SCRIPTS)/diagrams/gen_proto.py
+	@$(PYTHON) $(SCRIPTS)/diagrams/gen_fsm.py
+
 clean:
 	rm -rf obj_dir sim_build $(WAVE_DIR)/*.vcd $(WAVE_DIR)/*.fst
 	find $(TB_DIR) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -176,4 +186,5 @@ help:
 	@echo "make test TEST=<name>     run tests matching <name>"
 	@echo "make waves TEST=<name>    run <name> and keep the waveform"
 	@echo "make mutate               run the mutation set"
+	@echo "make diagrams             regenerate docs/img and the state machines"
 	@echo "make all                  lint + test"
