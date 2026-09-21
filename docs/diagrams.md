@@ -311,7 +311,8 @@ an honest account of what is not verified at all.
 ## Regenerating
 
 ```sh
-make diagrams
+make diagrams          # rebuild every figure
+make diagrams-check    # fail if a committed figure is stale
 ```
 
 Requires `python3` only for the SVGs. The Mermaid blocks in this file are

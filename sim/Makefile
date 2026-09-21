@@ -61,7 +61,7 @@ WAIVERS := $(ROOT)/lint/waivers.vlt
 # they are not global.
 WAIVERS_PERFILE := $(ROOT)/lint/waivers_perfile.vlt
 
-.PHONY: all lint lint-rtl lint-style lint-libs lint-slang lint-synth lint-synth-bb test waves mutate diagrams print-rtl-srcs clean help
+.PHONY: all lint lint-rtl lint-style lint-libs lint-slang lint-synth lint-synth-bb test waves mutate diagrams diagrams-check print-rtl-srcs clean help
 
 all: lint test
 
@@ -212,6 +212,22 @@ diagrams:
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_verif.py
 	@$(PYTHON) $(SCRIPTS)/diagrams/gen_fsm.py
 
+# The claim in docs/diagrams.md is that a figure is a function of the design,
+# and the check for that claim is: regenerate, and the tree is unchanged. This
+# target is that check. It fails if a committed figure is stale -- which is the
+# one way a generated diagram can still lie.
+diagrams-check: diagrams
+	@if git -C $(ROOT) diff --quiet -- docs/img docs/diagrams.md; then \
+	  echo "diagrams: up to date"; \
+	else \
+	  echo "diagrams: the working tree does not match what the generators"; \
+	  echo "produce from the current design (run this on a clean tree --"; \
+	  echo "an uncommitted prose edit to docs/diagrams.md counts too):"; \
+	  git -C $(ROOT) diff --stat -- docs/img docs/diagrams.md; \
+	  echo "run 'make diagrams' and commit the result"; \
+	  exit 1; \
+	fi
+
 clean:
 	rm -rf obj_dir sim_build $(WAVE_DIR)/*.vcd $(WAVE_DIR)/*.fst
 	find $(TB_DIR) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -224,6 +240,7 @@ help:
 	@echo "make waves TEST=<name>    run <name> and keep the waveform"
 	@echo "make mutate               run the mutation set"
 	@echo "make diagrams             regenerate docs/img and the state machines"
+	@echo "make diagrams-check       fail if a committed figure is stale"
 	@echo "make lint-synth           elaborate with SYNTHESIS defined, as DC sees it"
 	@echo "make lint-synth-bb        the same, with the syn/ black boxes substituted"
 	@echo "make all                  lint + test"
