@@ -314,12 +314,22 @@ known.
 **ECC, parity, and any other error handling.** The arrays are plain flops and
 SRAM with no protection and no poison, and nothing models a fault.
 
-**Frequency, area and gate count.** Unknown, and this is the largest gap in
-the list. `dc_shell` has never run on this design: there is no Synopsys tool
+**That the L1 synthesises at reasonable cost.** `mshr_file` expands to 362,643
+gates from 232 lines — more than `dir_ctrl` and `router` together — and neither
+it nor `l1_cache`, which contains it, fits in 15 GB of memory in the
+open-source flow. The directory's equivalent structure, `tbe_file`, is 8,532
+gates. That gap is measured and not explained; `docs/synthesis.md` says what is
+established and what is not. Every functional tier passes, so this is a cost
+question rather than a correctness one, but it is open.
+
+**Frequency and area of the complete design.** Partly known now.
+`docs/synthesis.md` has measured numbers for seven blocks on ASAP7 at two
+corners and sky130 at one, from a flow that runs. What is still unknown is the
+whole design's: `system_top` and `tile_top` have not been synthesised, the
+arrays are black-boxed so no cache array is in any number, and there is no
+place and route, so none of it is post-layout. `dc_shell` has never run on this design: there is no Synopsys tool
 and no PDK on the machine it was built on. A complete Design Compiler flow
-exists in `syn/` and three checks below stand in for the front end, but a
-front-end check is not a synthesis result. "Synthesizable-shaped" remains a
-coding discipline here, not a measurement.
+exists in `syn/`, and `syn/yosys/` measures what free tools can measure.
 
 **Power, clock gating, and any other physical property.** No power intent, no
 multi-corner timing, no place and route. `syn/README.md` lists what the flow
