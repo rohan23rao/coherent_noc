@@ -132,7 +132,7 @@ def sv2v_convert(files):
 
 
 def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16,
-                 flatten=True):
+                 flatten=True, abc_effort="high"):
     # `chparam -set` rewrites the module's own defaults. Passing the same
     # values through `hierarchy -chparam` makes yosys derive a $paramod copy,
     # which then collides with the plain module when `synth -top` re-resolves
@@ -142,6 +142,12 @@ def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16,
                      for k, v in TOP_PARAMS.get(top, {}).items())
     bb = " ".join(BLACKBOX)
     flatten = " -flatten" if flatten else ""
+    # `&dch -f` is abc's don't-care-based rewriting. It is worth having, and it
+    # is where the memory goes: on mshr_file -- 232 lines and four entries, but
+    # 1,490 primary outputs because every entry is exposed combinationally --
+    # yosys hands abc a 362,643-gate network and &dch takes 14 GB chewing it.
+    # Dropping it costs quality of result and lets the block finish.
+    dch = "&get,-n;&dch,-f;" if abc_effort == "high" else "&get,-n;"
     return f"""
 read_verilog {design}
 # The arrays and the behavioural memory are black boxes; see decision D25.
@@ -190,7 +196,7 @@ dfflibmap -liberty {lib}
 # So the abc script is spelled out, with `buffer` to cap fanout and
 # `upsize`/`dnsize` to pick drive strengths -- the same tail the OpenROAD flow
 # scripts use. Without it the timing reports are fiction.
-abc -liberty {lib} -D {period_ps} -script +strash;&get,-n;&dch,-f;&nf,-D,{period_ps};&put;buffer,-N,{max_fanout};upsize,-D,{period_ps};dnsize,-D,{period_ps}
+abc -liberty {lib} -D {period_ps} -script +strash;{dch}&nf,-D,{period_ps};&put;buffer,-N,{max_fanout};upsize,-D,{period_ps};dnsize,-D,{period_ps}
 setundef -zero
 opt_clean -purge
 # A $display or $error left outside `ifndef SYNTHESIS survives into the
@@ -309,12 +315,30 @@ def one_run(args, lib, design, period_ps):
     ys = os.path.join(outdir, "synth.ys")
     with open(ys, "w") as f:
         f.write(yosys_script(design, args.top, lib, period_ps, outdir,
-                             args.max_fanout, args.flatten))
+                             args.max_fanout, args.flatten,
+                             args.abc_effort))
     t0 = time.time()
     log = os.path.join(outdir, "yosys.log")
     r = run(["yosys", "-q", "-l", log, ys])
     wall = time.time() - t0
     text = open(log, errors="replace").read()
+
+    # A negative return code is a signal, and the signal here is all but always
+    # the OOM killer landing on abc. Retry once with &dch off rather than
+    # reporting nothing: a result with the quality knob turned down, labelled
+    # as such, beats a blank row.
+    if r.returncode < 0 and args.abc_effort == "high":
+        sys.stderr.write(f"  {args.top}: yosys killed (signal "
+                         f"{-r.returncode}); retrying with --abc-effort low\n")
+        args.abc_effort = "low"
+        with open(ys, "w") as f:
+            f.write(yosys_script(design, args.top, lib, period_ps, outdir,
+                                 args.max_fanout, args.flatten, "low"))
+        t0 = time.time()
+        r = run(["yosys", "-q", "-l", log, ys])
+        wall = time.time() - t0
+        text = open(log, errors="replace").read()
+
     if r.returncode != 0 or "ERROR" in text:
         sys.stderr.write("\n".join(
             l for l in text.splitlines() if "ERROR" in l) + "\n")
@@ -333,6 +357,7 @@ def one_run(args, lib, design, period_ps):
         "top": args.top, "pdk": args.pdk, "corner": args.corner,
         "target_ps": period_ps, "sram": args.sram,
         "flattened": args.flatten,
+        "abc_effort": args.abc_effort,
         "cells": cells, "flops": flops, "area_um2": area,
         "sta_period_ns": period_ns,
         "sta_worst_slack_ns": slack,
@@ -399,6 +424,11 @@ def main():
     ap.add_argument("--period", type=float, default=500.0,
                     help="abc delay target, in PICOSECONDS for every PDK -- "
                          "abc normalises the Liberty's own time unit")
+    ap.add_argument("--abc-effort", choices=("high", "low"), default="high",
+                    dest="abc_effort",
+                    help="high runs abc's &dch -f, which is where the memory "
+                         "goes on wide combinational blocks. The flow retries "
+                         "at low automatically if yosys is killed.")
     ap.add_argument("--no-flatten", action="store_false", dest="flatten",
                     default=True,
                     help="keep the hierarchy. Costs roughly 3x in critical "
