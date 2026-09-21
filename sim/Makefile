@@ -57,6 +57,9 @@ VERILATOR_LINT_FLAGS_BASE := \
 VERILATOR_LINT_FLAGS := $(VERILATOR_LINT_FLAGS_BASE) --top-module $(TOP)
 
 WAIVERS := $(ROOT)/lint/waivers.vlt
+# Extra waivers for the per-module pass only -- see the file's header for why
+# they are not global.
+WAIVERS_PERFILE := $(ROOT)/lint/waivers_perfile.vlt
 
 .PHONY: all lint lint-rtl lint-style lint-libs lint-slang test waves mutate clean help
 
@@ -103,7 +106,7 @@ lint-libs:
 	@for m in $(LIB_MODULES); do \
 	  printf '  %-16s ' "$$m"; \
 	  $(VERILATOR) $(VERILATOR_LINT_FLAGS_BASE) --top-module $$m \
-	    $(WAIVERS) $(RTL_DIR)/pkg/coh_pkg.sv $(RTL_DIR)/lib/$$m.sv \
+	    $(WAIVERS) $(WAIVERS_PERFILE) $(RTL_DIR)/pkg/coh_pkg.sv $(RTL_DIR)/lib/$$m.sv \
 	    > /dev/null 2>$(CURDIR)/.lint_$$m.err || true; \
 	  if [ -s $(CURDIR)/.lint_$$m.err ]; then \
 	    echo "FAIL"; cat $(CURDIR)/.lint_$$m.err; rm -f $(CURDIR)/.lint_*.err; exit 1; \
@@ -114,7 +117,7 @@ lint-libs:
 	@for m in $(NOC_MODULES); do \
 	  printf '  %-18s ' "$$m"; \
 	  $(VERILATOR) $(VERILATOR_LINT_FLAGS_BASE) --top-module $$m \
-	    $(WAIVERS) $(RTL_SRCS) \
+	    $(WAIVERS) $(WAIVERS_PERFILE) $(RTL_SRCS) \
 	    > /dev/null 2>$(CURDIR)/.lint_$$m.err || true; \
 	  if [ -s $(CURDIR)/.lint_$$m.err ]; then \
 	    echo "FAIL"; cat $(CURDIR)/.lint_$$m.err; rm -f $(CURDIR)/.lint_*.err; exit 1; \

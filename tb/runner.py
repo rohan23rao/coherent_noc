@@ -36,6 +36,12 @@ HARNESS_DIR = TB_DIR / "harness"
 # build and the lint build honest about exactly the same set of exceptions --
 # a warning waived for one and not the other is how a lint gate rots.
 WAIVERS = REPO_ROOT / "lint" / "waivers.vlt"
+# Every testbench elaborates a SUBSET of the design -- one router, the
+# direct-connect harness, the whole system -- so a package parameter with no
+# consumer in that subset is an artefact of the cut, not a finding. The
+# design-level lint does not use this file, which is how the Phase 12 review
+# found three genuinely dead parameters.
+WAIVERS_PERFILE = REPO_ROOT / "lint" / "waivers_perfile.vlt"
 TEST_DIR = TB_DIR / "tests"
 
 # The simulator re-imports the test module in its own Python process, which does
@@ -87,7 +93,8 @@ def run(
     # coh_pkg always goes first: every module imports it, and a missing package
     # shows up as a confusing "Import package not found" rather than as a
     # missing-file error.
-    ordered = [str(WAIVERS), str(PKG)] + [str(s) for s in sources if Path(s) != PKG]
+    ordered = ([str(WAIVERS), str(WAIVERS_PERFILE), str(PKG)]
+               + [str(s) for s in sources if Path(s) != PKG])
     runner.build(
         sources=ordered,
         hdl_toplevel=toplevel,

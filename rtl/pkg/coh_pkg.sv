@@ -27,9 +27,6 @@ package coh_pkg;
   localparam int unsigned MESH_X_W    = $clog2(MESH_X);      // 1
   localparam int unsigned MESH_Y_W    = $clog2(MESH_Y);      // 1
 
-  // Tile that hosts the main-memory controller on its local port.
-  localparam int unsigned MEM_TILE_ID = 3;
-
   //---------------------------------------------------------------------------
   // Address geometry
   //---------------------------------------------------------------------------
@@ -104,7 +101,6 @@ package coh_pkg;
   localparam int unsigned VC_SEL_W        = $clog2(VCS_PER_PORT);    // 3
   localparam int unsigned VC_DEPTH        = 4;
   localparam int unsigned CREDIT_W        = $clog2(VC_DEPTH + 1);    // 3
-  localparam int unsigned VC_PTR_W        = $clog2(VC_DEPTH);        // 2
 
   localparam int unsigned NUM_PORTS       = 5;                       // N E S W L
   localparam int unsigned PORT_W          = $clog2(NUM_PORTS);       // 3
@@ -120,9 +116,15 @@ package coh_pkg;
   //---------------------------------------------------------------------------
   // Liveness bounds. These are assertion limits, not testbench watchdogs.
   //---------------------------------------------------------------------------
+  //
+  // There is deliberately no SINK_BOUND. The specification suggested asserting
+  // that a VN2 flit is never backpressured at a local ejection port for longer
+  // than some number of cycles; this design makes the sink property structural
+  // instead -- an L1's `vn2_ready_o` is tied high and the directory's VN2 queue
+  // carries an assertion that it never fills -- so there is no window to
+  // bound. A bound would be a weaker statement of something already proved.
   localparam int unsigned MSHR_TIMEOUT = 1000;
   localparam int unsigned TBE_TIMEOUT  = 500;
-  localparam int unsigned SINK_BOUND   = 8;
 
   //---------------------------------------------------------------------------
   // Router port encoding

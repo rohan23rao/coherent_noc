@@ -1,0 +1,14 @@
+`verilator_config
+// Waivers that apply ONLY to the per-module lint pass, where each module is
+// elaborated on its own with the package.
+//
+// The whole-design pass (lint-rtl) does NOT use this file, on purpose: there,
+// "this parameter has no consumer" is a real finding about the design, and the
+// Phase 12 review turned up three genuinely dead parameters that way --
+// MEM_TILE_ID, VC_PTR_W and SINK_BOUND -- all now deleted. Keeping the waiver
+// global would have hidden them.
+
+// A leaf module elaborated alone reads a handful of the package's parameters
+// and no more, so every other parameter in coh_pkg looks dead. That is an
+// artefact of the pass, not a property of the design.
+lint_off -rule UNUSEDPARAM -file "*coh_pkg.sv"

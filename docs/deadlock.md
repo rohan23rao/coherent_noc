@@ -168,10 +168,47 @@ if anything downstream arbitrates between them without knowing why they are
 separate.** Every one of these passed the direct-connect tests, where the
 shared resource was never contended.
 
-### Why the two VCs per vnet are not part of this argument
+### Why the two VCs per vnet are not part of THIS argument
 
 They are for head-of-line blocking relief only. Deadlock freedom comes from XY
 routing for the network and from the three virtual networks for the protocol;
 `VCS_PER_VNET = 1` would still be deadlock-free and would simply block more.
 That distinction is a standard follow-up question, and the measured evidence for
 it is in `docs/noc_perf.md`: buffer depth changes throughput, never delivery.
+
+### What the two VCs per vnet ARE part of: ordering
+
+They do not carry the deadlock argument, but since Phase 11 they carry a
+different one, and the two must not be confused.
+
+A packet keeps the virtual channel it was injected on for its whole path, and
+that channel is a function of the sending tile (`src_vc_id`, decision D22).
+That makes each VC index an **independent, XY-routed subnetwork**, which has
+two consequences:
+
+- **Deadlock freedom is unaffected.** Each subnetwork is XY-routed on its own,
+  so the acyclic channel-dependency argument in section 1 applies to each
+  separately. Restricting a packet to one of them cannot create a cycle that
+  was not there before -- it can only make a packet wait longer.
+
+- **Ordering is now guaranteed** between any two tiles that share a channel.
+  A VC buffer is FIFO and a packet holds its channel from head to tail, so two
+  messages from one sender to one receiver on the same virtual network cannot
+  be reordered.
+
+The protocol needs that second property and did not have it. The directory
+sends a cache a forward, and later -- on processing that cache's Put -- a
+Put-Ack. The forward is legal in `MI_A`; after the Put-Ack the cache is in `I`,
+where the table is blank. The cell is blank because a correct directory never
+sends a forward *after* an ack, which is a statement about **sending** order
+and says nothing about arrival order. Bug B19 is what happens when the two
+differ: the Put-Ack overtakes the forward, the cache retires its transaction,
+and the forward lands with no data to answer with and no state to receive it.
+
+So the honest summary of the virtual channels is: **for deadlock, they are
+optional; for ordering, they are load-bearing.** `VCS_PER_VNET = 1` would still
+be deadlock-free and would still be ordered -- it is the *per-hop reallocation*
+that breaks ordering, not the number of channels.
+
+The assertion that pins it is `a_same_vc` in `vc_allocator.sv`: a grant never
+moves a packet between channels.

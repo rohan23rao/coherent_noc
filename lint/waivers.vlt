@@ -4,13 +4,8 @@
 // Every entry carries a one-line justification. An empty file is the goal; a
 // growing file is a design smell. Waivers are reviewed at each phase gate.
 //
-// Current count: 8
-
-// coh_pkg declares the complete parameter set up front, so parameters read only
-// by modules that do not exist yet are flagged. Revisit at the Phase 12 gate:
-// by then every parameter must have a consumer, and this waiver should be
-// deletable. If it is not, the parameter is dead and should be removed instead.
-lint_off -rule UNUSEDPARAM -file "*coh_pkg.sv"
+// Current count: 7 global, plus one that applies only to the per-module
+// pass (lint/waivers_perfile.vlt).
 
 // The address-decode helpers each extract one field from a full address, so by
 // construction every one of them leaves the other fields unread. Making this
