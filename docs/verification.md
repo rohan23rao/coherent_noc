@@ -211,6 +211,55 @@ shrinks -- not that the claim quietly becomes true.
 
 ---
 
+## Gate results
+
+The numbers as they stand, from `make all` on a fresh `git clone`:
+
+```
+lint: clean   (Verilator -Wall design-level and per-module, slang, style checks)
+17 passed in 2012.56s (0:33:32)
+```
+
+Constrained random, five configurations in one simulation:
+
+| Configuration | Requests | Cycles | Worst MSHR age | Worst TBE age |
+| --- | ---: | ---: | ---: | ---: |
+| 4 lines | 100,003 | 998,278 | 874 / 40000 | 402 / 20000 |
+| 16 lines | 100,015 | 403,824 | 1311 / 40000 | 1063 / 20000 |
+| 256 lines | 100,020 | 616,675 | 1314 / 40000 | 1004 / 20000 |
+| L2 capacity pressure | 50,015 | 782,897 | 1107 / 40000 | 368 / 20000 |
+| racing, same line | 50,013 | 496,370 | 841 / 40000 | 575 / 20000 |
+
+No assertion failure, no SWMR violation, no value mismatch, in any of them.
+The bounds in that table are the raised ones the stress tier builds with; the
+defaults of 1000 and 500 are exercised by race R12, which measures 315 and 212
+against them.
+
+Coverage, accumulated across all five:
+
+```
+l1_arc     59/79  covered, 20 uncovered by construction
+dir_arc    31/37  covered,  6 uncovered by construction
+mshr_occ    5/5   covered    {0: 585609, 1: 306444, 2: 415849, 3: 793476, 4: 1197282}
+vc_occ      4/5   covered,  1 uncovered by construction
+sharers     5/5   covered    {0: 325604, 1: 53415, 2: 150606, 3: 11164, 4: 854}
+race       12/12  covered
+-> zero uncovered REACHABLE bins
+```
+
+Mutation:
+
+```
+15 mutations, 15 killed by their named test
+```
+
+Twelve of those delete one handling arc from the race catalogue. The other
+three break the invariants the constrained-random tier found -- B19's ordering
+rule, B20's pipeline yield and B21's data-valid restore -- each paired with the
+stress configuration that found it, run short.
+
+---
+
 ## What is NOT verified
 
 This is the part to read.
