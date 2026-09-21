@@ -132,7 +132,7 @@ def sv2v_convert(files):
 
 
 def yosys_script(design, top, lib, period_ps, outdir, max_fanout=16,
-                 flatten=False):
+                 flatten=True):
     # `chparam -set` rewrites the module's own defaults. Passing the same
     # values through `hierarchy -chparam` makes yosys derive a $paramod copy,
     # which then collides with the plain module when `synth -top` re-resolves
@@ -157,23 +157,29 @@ check -assert
 # synth operates on the top hierarchy already selected, and the derived name is
 # renamed back afterwards so OpenSTA can link the design by the name the
 # designer uses.
-# NOT flattened, for two reasons that happen to agree.
+# Flattened by default, and the measurement says why.
 #
-# Memory: flattening l1_cache put yosys at 12.8 GB and the kernel killed it.
-# The 256-bit line datapath -- byte-enable merge, fill, the MSHR file's data
-# -- multiplies out into something no optimisation pass wants to hold at once.
+# Run hierarchically, the router's critical path is 3.68 ns with a fanout-290
+# stage in it; flattened it is 1.26 ns with a fanout-5 stage. abc optimises one
+# module at a time and cannot buffer or restructure across a boundary, so
+# hierarchy does not merely cost provenance in the report -- it costs a factor
+# of three in the answer, and the high-fanout nets that dominate these paths
+# are exactly the ones that cross boundaries.
 #
-# Reports: the Design Compiler flow keeps hierarchy too, with
-# `compile_ultra -no_autoungroup`, and for the same reason it is worth keeping
-# here. A critical path that names modules is a path you can act on; after a
-# flatten it is a list of gates with no provenance. `--flatten` is there for
-# when the question is how much the boundaries cost.
+# The cost is memory: flattening l1_cache put yosys at 12.8 GB and the kernel
+# killed it. That block is run with --no-flatten, and its row says so, because
+# a number produced a different way does not belong in the same column without
+# a label.
 synth{flatten}
 # Flop count before technology mapping, where the cells are generic $_DFF_*
 # and the count does not depend on how a particular library spells its
 # registers. Counting mapped cells by name worked for ASAP7 and silently
 # reported zero flops for sky130.
-tee -o {outdir}/stat_premap.txt stat
+#
+# Restricted to the top module: `stat` with no selection prints a block per
+# module AND a design-wide summary, so summing the whole transcript counts
+# every flop at least twice. Flattened, the top module is the design.
+tee -o {outdir}/stat_premap.txt stat -top {top}
 dfflibmap -liberty {lib}
 # yosys's default `abc -D` maps for delay but leaves the netlist UNBUFFERED:
 # a net with a thousand sinks keeps whatever gate happened to drive it, and the
@@ -392,9 +398,12 @@ def main():
     ap.add_argument("--period", type=float, default=500.0,
                     help="abc delay target, in PICOSECONDS for every PDK -- "
                          "abc normalises the Liberty's own time unit")
-    ap.add_argument("--flatten", action="store_true",
-                    help="flatten the hierarchy before mapping; costs memory "
-                         "and the provenance in every report")
+    ap.add_argument("--no-flatten", action="store_false", dest="flatten",
+                    default=True,
+                    help="keep the hierarchy. Costs roughly 3x in critical "
+                         "path because abc cannot optimise across a module "
+                         "boundary; needed for blocks that will not fit in "
+                         "memory flattened")
     ap.add_argument("--max-fanout", type=int, default=16,
                     dest="max_fanout",
                     help="fanout cap for abc's buffer pass; matches the "

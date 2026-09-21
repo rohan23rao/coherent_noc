@@ -72,12 +72,20 @@ def main(outdir):
             fm = d.get("fmax_mhz")
             ws = d.get("worst_stage_ns")
             wf = d.get("worst_stage_fanout")
-            print(f"| `{d['top']}` | {d['cells']:,} | {d['flops']:,} | "
+            mark = "" if d.get("flattened", True) else " *"
+            print(f"| `{d['top']}`{mark} | {d['cells']:,} | {d['flops']:,} | "
                   f"{d['area_um2']:,.1f} | "
                   f"{f'{cp:.3f}' if cp is not None else '—'} | "
                   f"{f'{fm:.0f}' if fm is not None else '—'} | "
                   f"{f'{ws:.3f}' if ws is not None else '—'} | "
                   f"{wf if wf is not None else '—'} |")
+        if any(not d.get("flattened", True) for d in items):
+            print("\n`*` synthesised with the hierarchy kept, because it does "
+                  "not fit in memory flattened. abc cannot optimise across a "
+                  "module boundary, so that row's critical path is roughly "
+                  "three times what the same block reports flattened -- it is "
+                  "not comparable with the others and is marked rather than "
+                  "quietly mixed in.")
         print("\nThe last two columns are the flow's limitation, not the "
               "design's: abc cannot buffer a register-driven net and there is "
               "no `repair_design` here, so a high-fanout control signal keeps "
